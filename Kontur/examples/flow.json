@@ -1,0 +1,1001 @@
+{
+ "version": 1,
+ "width": 1920,
+ "height": 1080,
+ "duration": 10,
+ "fps": 60,
+ "background": {
+  "type": "radial",
+  "cx": 960,
+  "cy": 540,
+  "r": 1100,
+  "stops": [
+   [
+    0,
+    "#1b1640"
+   ],
+   [
+    0.55,
+    "#0c0b1f"
+   ],
+   [
+    1,
+    "#05050d"
+   ]
+  ]
+ },
+ "loop": true,
+ "nodes": [
+  {
+   "id": "blobA",
+   "type": "blob",
+   "parent": null,
+   "props": {
+    "x": 560,
+    "y": 420,
+    "radius": 330,
+    "points": 9,
+    "amount": 0.22,
+    "frequency": 1.1,
+    "speed": 0.35,
+    "seed": 3,
+    "opacity": 0.55,
+    "blur": 40,
+    "fill": {
+     "type": "linear",
+     "angle": 35,
+     "length": 660,
+     "stops": [
+      [
+       0,
+       "#6d28d9"
+      ],
+      [
+       1,
+       "#db2777"
+      ]
+     ]
+    }
+   },
+   "mods": [
+    {
+     "type": "wiggle",
+     "props": [
+      "x",
+      "y"
+     ],
+     "amp": 60,
+     "freq": 0.12,
+     "seed": 3
+    },
+    {
+     "type": "spin",
+     "speed": 6
+    }
+   ]
+  },
+  {
+   "id": "blobB",
+   "type": "blob",
+   "parent": null,
+   "props": {
+    "x": 1400,
+    "y": 640,
+    "radius": 300,
+    "points": 9,
+    "amount": 0.22,
+    "frequency": 1.1,
+    "speed": 0.35,
+    "seed": 9,
+    "opacity": 0.55,
+    "blur": 40,
+    "fill": {
+     "type": "linear",
+     "angle": 35,
+     "length": 600,
+     "stops": [
+      [
+       0,
+       "#0891b2"
+      ],
+      [
+       1,
+       "#4f46e5"
+      ]
+     ]
+    }
+   },
+   "mods": [
+    {
+     "type": "wiggle",
+     "props": [
+      "x",
+      "y"
+     ],
+     "amp": 60,
+     "freq": 0.12,
+     "seed": 9
+    },
+    {
+     "type": "spin",
+     "speed": 6
+    }
+   ]
+  },
+  {
+   "id": "wave0",
+   "type": "path",
+   "parent": null,
+   "props": {
+    "points": [
+     [
+      -100,
+      800
+     ],
+     [
+      32,
+      843.0413654539714
+     ],
+     [
+      164,
+      859.9744161824904
+     ],
+     [
+      296,
+      840.527790833069
+     ],
+     [
+      428,
+      796.4975513943452
+     ],
+     [
+      560,
+      754.5918502815243
+     ],
+     [
+      692,
+      740.2301234698496
+     ],
+     [
+      824,
+      762.1240017276607
+     ],
+     [
+      956,
+      806.9929522910296
+     ],
+     [
+      1088,
+      847.6200718309492
+     ],
+     [
+      1220,
+      859.3614947974029
+     ],
+     [
+      1352,
+      835.0950315735057
+     ],
+     [
+      1484,
+      789.5403931266211
+     ],
+     [
+      1616,
+      750.3304118548608
+     ],
+     [
+      1748,
+      741.249336250921
+     ],
+     [
+      1880,
+      767.8056249199739
+     ],
+     [
+      2012,
+      813.8905895060923
+     ]
+    ],
+    "smooth": true,
+    "closed": false,
+    "stroke": {
+     "type": "linear",
+     "x1": 0,
+     "y1": 0,
+     "x2": 1920,
+     "y2": 0,
+     "stops": [
+      [
+       0,
+       "#22d3ee"
+      ],
+      [
+       0.5,
+       "#a78bfa"
+      ],
+      [
+       1,
+       "#f472b6"
+      ]
+     ]
+    },
+    "strokeWidth": 4,
+    "opacity": 0.8,
+    "trimStart": 0,
+    "trimEnd": 0.35,
+    "glow": {
+     "blur": 10,
+     "color": "#8b5cf6",
+     "strength": 0.7
+    }
+   },
+   "keys": {
+    "trimOffset": [
+     {
+      "t": 0,
+      "v": 0,
+      "ease": "linear"
+     },
+     {
+      "t": 10,
+      "v": 2
+     }
+    ]
+   },
+   "mods": [
+    {
+     "type": "deform",
+     "amount": 30,
+     "scale": 0.004,
+     "speed": 0.4,
+     "seed": 0,
+     "detail": 32
+    }
+   ]
+  },
+  {
+   "id": "wave1",
+   "type": "path",
+   "parent": null,
+   "props": {
+    "points": [
+     [
+      -100,
+      817.3176787846318
+     ],
+     [
+      32,
+      827.9078104702556
+     ],
+     [
+      164,
+      791.2401097457172
+     ],
+     [
+      296,
+      729.5567118378534
+     ],
+     [
+      428,
+      680.2739382069129
+     ],
+     [
+      560,
+      673.2860580269489
+     ],
+     [
+      692,
+      712.8318256468995
+     ],
+     [
+      824,
+      774.9233090810703
+     ],
+     [
+      956,
+      821.8966476649301
+     ],
+     [
+      1088,
+      825.2584445343819
+     ],
+     [
+      1220,
+      782.9694788193406
+     ],
+     [
+      1352,
+      720.6816696598457
+     ],
+     [
+      1484,
+      676.1779662709754
+     ],
+     [
+      1616,
+      676.4537179468259
+     ],
+     [
+      1748,
+      721.3416574210538
+     ],
+     [
+      1880,
+      783.6133629461312
+     ],
+     [
+      2012,
+      825.4956535555284
+     ]
+    ],
+    "smooth": true,
+    "closed": false,
+    "stroke": {
+     "type": "linear",
+     "x1": 0,
+     "y1": 0,
+     "x2": 1920,
+     "y2": 0,
+     "stops": [
+      [
+       0,
+       "#22d3ee"
+      ],
+      [
+       0.5,
+       "#a78bfa"
+      ],
+      [
+       1,
+       "#f472b6"
+      ]
+     ]
+    },
+    "strokeWidth": 3,
+    "opacity": 0.6200000000000001,
+    "trimStart": 0,
+    "trimEnd": 0.35,
+    "glow": {
+     "blur": 10,
+     "color": "#8b5cf6",
+     "strength": 0.7
+    }
+   },
+   "keys": {
+    "trimOffset": [
+     {
+      "t": 0,
+      "v": 0.3,
+      "ease": "linear"
+     },
+     {
+      "t": 10,
+      "v": 2.3
+     }
+    ]
+   },
+   "mods": [
+    {
+     "type": "deform",
+     "amount": 30,
+     "scale": 0.004,
+     "speed": 0.4,
+     "seed": 5,
+     "detail": 32
+    }
+   ]
+  },
+  {
+   "id": "wave2",
+   "type": "path",
+   "parent": null,
+   "props": {
+    "points": [
+     [
+      -100,
+      790.9297426825682
+     ],
+     [
+      32,
+      733.4988150155905
+     ],
+     [
+      164,
+      655.7479556705148
+     ],
+     [
+      296,
+      604.8397926110483
+     ],
+     [
+      428,
+      611.6545344279847
+     ],
+     [
+      560,
+      672.0584501801075
+     ],
+     [
+      692,
+      749.4113351138609
+     ],
+     [
+      824,
+      796.7919672031487
+     ],
+     [
+      956,
+      785.459890808828
+     ],
+     [
+      1088,
+      722.2889914100248
+     ],
+     [
+      1220,
+      645.597888911063
+     ],
+     [
+      1352,
+      601.9063769933508
+     ],
+     [
+      1484,
+      617.7171405031293
+     ],
+     [
+      1616,
+      683.4395824551691
+     ],
+     [
+      1748,
+      759.2073514707224
+     ],
+     [
+      1880,
+      799.0607355694871
+     ],
+     [
+      2012,
+      778.8252067375316
+     ]
+    ],
+    "smooth": true,
+    "closed": false,
+    "stroke": {
+     "type": "linear",
+     "x1": 0,
+     "y1": 0,
+     "x2": 1920,
+     "y2": 0,
+     "stops": [
+      [
+       0,
+       "#22d3ee"
+      ],
+      [
+       0.5,
+       "#a78bfa"
+      ],
+      [
+       1,
+       "#f472b6"
+      ]
+     ]
+    },
+    "strokeWidth": 2,
+    "opacity": 0.44000000000000006,
+    "trimStart": 0,
+    "trimEnd": 0.35,
+    "glow": {
+     "blur": 10,
+     "color": "#8b5cf6",
+     "strength": 0.7
+    }
+   },
+   "keys": {
+    "trimOffset": [
+     {
+      "t": 0,
+      "v": 0.6,
+      "ease": "linear"
+     },
+     {
+      "t": 10,
+      "v": 2.6
+     }
+    ]
+   },
+   "mods": [
+    {
+     "type": "deform",
+     "amount": 30,
+     "scale": 0.004,
+     "speed": 0.4,
+     "seed": 10,
+     "detail": 32
+    }
+   ]
+  },
+  {
+   "id": "ring",
+   "type": "group",
+   "parent": null,
+   "props": {
+    "x": 960,
+    "y": 540,
+    "anchorX": 960,
+    "anchorY": 540
+   },
+   "mods": [
+    {
+     "type": "spin",
+     "speed": 12
+    }
+   ]
+  },
+  {
+   "id": "dot",
+   "type": "circle",
+   "parent": "ring",
+   "props": {
+    "x": 1260,
+    "y": 540,
+    "r": 9,
+    "fill": "#e0e7ff",
+    "repeat": {
+     "count": 36,
+     "rotation": 10,
+     "cx": 960,
+     "cy": 540
+    }
+   },
+   "keys": {
+    "opacity": [
+     {
+      "t": 0,
+      "v": 0,
+      "ease": "outCubic"
+     },
+     {
+      "t": 1.2,
+      "v": 0.9
+     }
+    ]
+   },
+   "mods": [
+    {
+     "type": "oscillate",
+     "prop": "scale",
+     "amp": 0.7,
+     "freq": 0.5,
+     "phaseStep": 20
+    },
+    {
+     "type": "noiseColor",
+     "amount": 0.5,
+     "speed": 0.4
+    }
+   ]
+  },
+  {
+   "id": "orbitLine",
+   "type": "circle",
+   "parent": null,
+   "props": {
+    "x": 960,
+    "y": 540,
+    "r": 380,
+    "fill": "none",
+    "stroke": "#c4b5fd",
+    "strokeWidth": 2,
+    "opacity": 0.5,
+    "rotation": -90
+   },
+   "mods": [
+    {
+     "type": "spin",
+     "speed": -20
+    }
+   ],
+   "keys": {
+    "trimEnd": [
+     {
+      "t": 0.3,
+      "v": 0,
+      "ease": "inOutQuart"
+     },
+     {
+      "t": 2.5,
+      "v": 1
+     }
+    ],
+    "trimStart": [
+     {
+      "t": 8.2,
+      "v": 0,
+      "ease": "inOutQuart"
+     },
+     {
+      "t": 10.399999999999999,
+      "v": 1
+     }
+    ]
+   }
+  },
+  {
+   "id": "spark",
+   "type": "circle",
+   "parent": null,
+   "props": {
+    "r": 6,
+    "fill": "#fde68a",
+    "glow": {
+     "blur": 8,
+     "color": "#fbbf24",
+     "strength": 1
+    },
+    "repeat": {
+     "count": 14,
+     "scale": 0.92,
+     "opacity": 0.85
+    }
+   },
+   "mods": [
+    {
+     "type": "followPath",
+     "path": "M960 540 C1210 280 1480 420 1480 540 C1480 660 1210 800 960 540 C710 280 440 420 440 540 C440 660 710 800 960 540Z",
+     "speed": 0.1,
+     "offsetStep": -0.008,
+     "orient": false
+    }
+   ]
+  },
+  {
+   "id": "hero",
+   "type": "path",
+   "parent": null,
+   "props": {
+    "x": 960,
+    "y": 540,
+    "d": {
+     "shape": "circle",
+     "r": 150
+    },
+    "shadow": {
+     "y": 30,
+     "blur": 40,
+     "color": "#000",
+     "opacity": 0.5
+    },
+    "fill": {
+     "type": "linear",
+     "angle": 60,
+     "length": 320,
+     "stops": [
+      [
+       0,
+       "#f0abfc"
+      ],
+      [
+       0.5,
+       "#818cf8"
+      ],
+      [
+       1,
+       "#22d3ee"
+      ]
+     ]
+    }
+   },
+   "mods": [
+    {
+     "type": "spin",
+     "speed": 15
+    },
+    {
+     "type": "spring",
+     "prop": "scale",
+     "stiffness": 90,
+     "damping": 7
+    }
+   ],
+   "keys": {
+    "d": [
+     {
+      "t": 0.8,
+      "v": {
+       "shape": "circle",
+       "r": 150
+      },
+      "ease": "inOutBack"
+     },
+     {
+      "t": 1.7000000000000002,
+      "v": {
+       "shape": "circle",
+       "r": 150
+      },
+      "ease": "inOutBack"
+     },
+     {
+      "t": 2.6,
+      "v": {
+       "shape": "star",
+       "points": 5,
+       "outerRadius": 190,
+       "innerRadius": 90,
+       "cornerRadius": 18
+      },
+      "ease": "inOutBack"
+     },
+     {
+      "t": 3.5,
+      "v": {
+       "shape": "star",
+       "points": 5,
+       "outerRadius": 190,
+       "innerRadius": 90,
+       "cornerRadius": 18
+      },
+      "ease": "inOutBack"
+     },
+     {
+      "t": 4.4,
+      "v": {
+       "shape": "rect",
+       "width": 260,
+       "height": 260,
+       "radius": 60
+      },
+      "ease": "inOutBack"
+     },
+     {
+      "t": 5.300000000000001,
+      "v": {
+       "shape": "rect",
+       "width": 260,
+       "height": 260,
+       "radius": 60
+      },
+      "ease": "inOutBack"
+     },
+     {
+      "t": 6.2,
+      "v": {
+       "shape": "heart",
+       "size": 330
+      },
+      "ease": "inOutBack"
+     },
+     {
+      "t": 7.1000000000000005,
+      "v": {
+       "shape": "heart",
+       "size": 330
+      },
+      "ease": "inOutBack"
+     },
+     {
+      "t": 8,
+      "v": {
+       "shape": "polygon",
+       "sides": 6,
+       "radius": 170,
+       "cornerRadius": 30
+      },
+      "ease": "inOutBack"
+     },
+     {
+      "t": 8.9,
+      "v": {
+       "shape": "polygon",
+       "sides": 6,
+       "radius": 170,
+       "cornerRadius": 30
+      },
+      "ease": "inOutBack"
+     },
+     {
+      "t": 9.8,
+      "v": {
+       "shape": "circle",
+       "r": 150
+      },
+      "ease": "inOutBack"
+     }
+    ],
+    "scale": [
+     {
+      "t": 0,
+      "v": 0
+     },
+     {
+      "t": 0.4,
+      "v": 1
+     },
+     {
+      "t": 1.69,
+      "v": 1,
+      "ease": "linear"
+     },
+     {
+      "t": 1.7,
+      "v": 0.78,
+      "ease": "hold"
+     },
+     {
+      "t": 1.95,
+      "v": 1
+     },
+     {
+      "t": 3.49,
+      "v": 1,
+      "ease": "linear"
+     },
+     {
+      "t": 3.5,
+      "v": 0.78,
+      "ease": "hold"
+     },
+     {
+      "t": 3.75,
+      "v": 1
+     },
+     {
+      "t": 5.29,
+      "v": 1,
+      "ease": "linear"
+     },
+     {
+      "t": 5.3,
+      "v": 0.78,
+      "ease": "hold"
+     },
+     {
+      "t": 5.55,
+      "v": 1
+     },
+     {
+      "t": 7.090000000000001,
+      "v": 1,
+      "ease": "linear"
+     },
+     {
+      "t": 7.1000000000000005,
+      "v": 0.78,
+      "ease": "hold"
+     },
+     {
+      "t": 7.3500000000000005,
+      "v": 1
+     },
+     {
+      "t": 8.89,
+      "v": 1,
+      "ease": "linear"
+     },
+     {
+      "t": 8.9,
+      "v": 0.78,
+      "ease": "hold"
+     },
+     {
+      "t": 9.15,
+      "v": 1
+     }
+    ],
+    "fill": [
+     {
+      "t": 0,
+      "v": {
+       "type": "linear",
+       "angle": 60,
+       "length": 320,
+       "stops": [
+        [
+         0,
+         "#f0abfc"
+        ],
+        [
+         0.5,
+         "#818cf8"
+        ],
+        [
+         1,
+         "#22d3ee"
+        ]
+       ]
+      },
+      "ease": "inOutSine"
+     },
+     {
+      "t": 5,
+      "v": {
+       "type": "linear",
+       "angle": 240,
+       "length": 320,
+       "stops": [
+        [
+         0,
+         "#fde047"
+        ],
+        [
+         0.5,
+         "#fb7185"
+        ],
+        [
+         1,
+         "#a855f7"
+        ]
+       ]
+      },
+      "ease": "inOutSine"
+     },
+     {
+      "t": 10,
+      "v": {
+       "type": "linear",
+       "angle": 420,
+       "length": 320,
+       "stops": [
+        [
+         0,
+         "#f0abfc"
+        ],
+        [
+         0.5,
+         "#818cf8"
+        ],
+        [
+         1,
+         "#22d3ee"
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "title",
+   "type": "text",
+   "parent": null,
+   "props": {
+    "x": 960,
+    "y": 1000,
+    "text": "K O N T U R",
+    "fontSize": 30,
+    "fontWeight": 300,
+    "letterSpacing": 18,
+    "fill": "#c7d2fe",
+    "opacity": 0.85
+   },
+   "keys": {
+    "textReveal": [
+     {
+      "t": 1,
+      "v": 0,
+      "ease": "linear"
+     },
+     {
+      "t": 2.4,
+      "v": 1
+     }
+    ],
+    "letterSpacing": [
+     {
+      "t": 1,
+      "v": 4,
+      "ease": "outCubic"
+     },
+     {
+      "t": 3,
+      "v": 18
+     }
+    ]
+   }
+  }
+ ]
+}

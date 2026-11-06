@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PixelForge</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4' shape-rendering='crispEdges'%3E%3Crect width='2' height='2' fill='%23ff004d'/%3E%3Crect x='2' y='2' width='2' height='2' fill='%2329adff'/%3E%3Crect x='2' width='2' height='2' fill='%23ffec27'/%3E%3Crect y='2' width='2' height='2' fill='%2300e436'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo"></span>PixelForge</div>
+    <div class="group">
+      <select id="spriteSelect" title="Открытый спрайт"></select>
+      <button id="btnNew" title="Новый спрайт">＋ Новый</button>
+      <button id="btnImport" title="Импорт PNG (можно перетащить файл в окно)">Импорт</button>
+      <button id="btnDuplicate" title="Дублировать спрайт">⧉</button>
+      <button id="btnRename" title="Переименовать">✎</button>
+      <button id="btnResize" title="Размер холста">⤢</button>
+      <button id="btnHistory" title="История версий (автосохранения)">🕘</button>
+      <button id="btnDelete" class="danger" title="Удалить спрайт (в корзину)">🗑</button>
+    </div>
+    <div class="group">
+      <button id="btnUndo" title="Отменить (Ctrl+Z)">↶</button>
+      <button id="btnRedo" title="Повторить (Ctrl+Y)">↷</button>
+    </div>
+    <div class="group">
+      <button id="btnZoomOut" title="Отдалить">−</button>
+      <span id="zoomLabel" class="label">100%</span>
+      <button id="btnZoomIn" title="Приблизить">+</button>
+      <button id="btnFit" title="Вписать в окно (0)">⛶</button>
+    </div>
+    <div class="group toggles">
+      <button id="tglGrid" class="toggle on" title="Сетка (#)">Сетка</button>
+      <button id="tglOnion" class="toggle" title="Onion skin (K)">Onion</button>
+      <button id="tglMirror" class="toggle" title="Зеркальное рисование (M)">Зеркало</button>
+      <button id="tglPerfect" class="toggle on" title="Pixel-perfect карандаш: убирает «уголки» в линиях (P)">PP</button>
+      <button id="tglTiling" class="toggle" title="Режим тайлинга: превью 3×3 и рисование с переносом через край (T)">Тайл</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="group">
+      <button id="tglFollow" class="toggle on" title="Автоматически показывать то, что рисует Claude">👁 Следить за Claude</button>
+      <div class="menu">
+        <button id="btnExport">Экспорт ▾</button>
+        <div class="menu-pop" id="exportMenu">
+          <label>Масштаб <select id="exportScale"><option>1</option><option>2</option><option>4</option><option>8</option><option>16</option></select></label>
+          <a data-export="frame">PNG текущего кадра</a>
+          <a data-export="sheet">Спрайт-лист PNG</a>
+          <a data-export="json">Спрайт-лист JSON (разметка)</a>
+          <a data-export="anim">Анимация (APNG)</a>
+          <a data-export="gif">Анимация (GIF)</a>
+          <p class="menu-note">Экспорт в Unity-проект (.meta + .anim) — попросите Claude: инструмент export_unity.</p>
+        </div>
+      </div>
+      <span id="conn" class="conn" title="Соединение с сервером"></span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="tools">
+      <div class="toolset" id="toolset">
+        <button data-tool="pencil" title="Карандаш (B)">✏️</button>
+        <button data-tool="eraser" title="Ластик (E)">🧽</button>
+        <button data-tool="fill" title="Заливка (G), Shift — все пиксели этого цвета">🪣</button>
+        <button data-tool="picker" title="Пипетка (I), или Alt+клик">💧</button>
+        <button data-tool="line" title="Линия (L), Shift — угол 45°">╱</button>
+        <button data-tool="rect" title="Прямоугольник (U), Shift — квадрат">▭</button>
+        <button data-tool="ellipse" title="Эллипс (O), Shift — круг">◯</button>
+        <button data-tool="move" title="Сдвиг (V): слоя, или выделения если оно есть">✥</button>
+        <button data-tool="select" title="Прямоугольное выделение (S), Shift — добавить">⬚</button>
+        <button data-tool="lasso" title="Лассо (Q), Shift — добавить">➰</button>
+        <button data-tool="dither" title="Дизеринг (D): шахматный узор, Shift — другая чётность">▚</button>
+        <button data-tool="shade" title="Шейдинг (H): ЛКМ — следующий цвет палитры, ПКМ — предыдущий">◐</button>
+      </div>
+      <div class="tool-opts">
+        <label title="Размер кисти ([ и ])">Кисть<input id="brushSize" type="number" min="1" max="16" value="1"></label>
+        <button id="tglFillShapes" class="toggle small" title="Залитые фигуры">Залитые</button>
+      </div>
+      <div class="colors">
+        <div class="swatch-pair">
+          <button id="secondary" class="swatch big secondary" title="Дополнительный цвет (ПКМ)"></button>
+          <button id="primary" class="swatch big primary" title="Основной цвет (ЛКМ)"></button>
+        </div>
+        <button id="btnSwap" class="small" title="Поменять цвета (X)">⇄</button>
+        <label class="alpha" title="Прозрачность основного цвета">α<input id="alpha" type="range" min="0" max="255" value="255"></label>
+        <input id="colorInput" type="color" hidden>
+      </div>
+    </aside>
+
+    <section class="stage" id="stage">
+      <canvas id="canvas"></canvas>
+      <div class="claude-badge" id="claudeBadge">🤖 Claude рисует…</div>
+      <div class="drop-hint" id="dropHint">Отпустите PNG для импорта</div>
+      <div class="empty" id="empty">
+        <p>Нет спрайтов.</p>
+        <button id="btnNewEmpty">＋ Создать спрайт</button>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="panel">
+        <div class="panel-head">
+          <span>Превью</span>
+          <select id="previewTag"><option value="">все кадры</option></select>
+          <button id="btnPlay" class="small" title="Проиграть (Enter)">▶</button>
+        </div>
+        <div class="preview-box"><canvas id="preview"></canvas></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <span>Палитра</span>
+          <select id="palettePreset" title="Загрузить готовую палитру">
+            <option value="">пресет…</option>
+            <option value="pico8">PICO-8</option>
+            <option value="db16">DawnBringer 16</option>
+            <option value="gb">Game Boy</option>
+            <option value="nes">NES-like 24</option>
+            <option value="gray">Оттенки серого</option>
+            <option value="extract">из спрайта</option>
+          </select>
+          <button id="btnRamp" class="small" title="Добавить рампу теней/бликов из основного цвета">◐＋</button>
+          <button id="btnAddColor" class="small" title="Добавить основной цвет в палитру">＋</button>
+        </div>
+        <div class="palette" id="palette"></div>
+        <div class="hint">ЛКМ — основной, ПКМ — дополнительный, Shift+клик — удалить</div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <span>Референс</span>
+          <button id="btnRefLoad" class="small" title="Загрузить картинку-референс (не входит в спрайт)">Загрузить</button>
+          <button id="btnRefClear" class="small" title="Убрать референс">✕</button>
+        </div>
+        <div class="ref-row">
+          <label title="Непрозрачность референса"><input id="refOpacity" type="range" min="0" max="100" value="40"></label>
+          <label class="check"><input id="refAbove" type="checkbox"> поверх</label>
+          <label class="check"><input id="refShow" type="checkbox" checked> показать</label>
+        </div>
+        <input id="refInput" type="file" accept="image/*" hidden>
+      </div>
+      <div class="panel grow">
+        <div class="panel-head"><span>Активность</span></div>
+        <ul class="log" id="log"></ul>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="timeline">
+    <div class="tl-bar">
+      <div class="group">
+        <span class="label">Слои</span>
+        <button id="btnLayerAdd" class="small" title="Новый слой">＋</button>
+        <button id="btnLayerDel" class="small" title="Удалить слой">−</button>
+        <button id="btnLayerUp" class="small" title="Слой выше">▲</button>
+        <button id="btnLayerDown" class="small" title="Слой ниже">▼</button>
+        <button id="btnLayerMerge" class="small" title="Слить с нижним">⤓</button>
+      </div>
+      <div class="group">
+        <span class="label">Кадры</span>
+        <button id="btnFrameAdd" class="small" title="Новый пустой кадр">＋</button>
+        <button id="btnFrameDup" class="small" title="Дублировать кадр (Alt+N)">⧉</button>
+        <button id="btnFrameDel" class="small" title="Удалить кадр">−</button>
+        <button id="btnFrameLeft" class="small" title="Сдвинуть влево">◀</button>
+        <button id="btnFrameRight" class="small" title="Сдвинуть вправо">▶</button>
+        <button id="btnDuration" class="small" title="Длительность кадров">⏱</button>
+        <button id="btnTag" class="small" title="Добавить тег анимации">🏷</button>
+      </div>
+      <div class="spacer"></div>
+      <span id="status" class="status"></span>
+    </div>
+    <div class="tl-grid" id="timeline"></div>
+  </footer>
+
+  <dialog id="formDialog">
+    <form method="dialog">
+      <h3 id="fdTitle"></h3>
+      <p id="fdText" class="fd-text"></p>
+      <div id="fdFields" class="fd-fields"></div>
+      <div class="actions">
+        <button value="extra" id="fdExtra" class="danger" formnovalidate hidden></button>
+        <span class="spacer"></span>
+        <button value="cancel" formnovalidate>Отмена</button>
+        <button value="ok" id="fdOk" class="primary-btn">OK</button>
+      </div>
+    </form>
+  </dialog>
+  <input id="fileInput" type="file" accept="image/png" hidden>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

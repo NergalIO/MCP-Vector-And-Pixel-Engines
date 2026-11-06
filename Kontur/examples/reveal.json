@@ -1,0 +1,455 @@
+{
+ "version": 1,
+ "width": 1080,
+ "height": 1080,
+ "duration": 6,
+ "fps": 60,
+ "background": "#f4f1ea",
+ "loop": true,
+ "nodes": [
+  {
+   "id": "revealMask",
+   "type": "circle",
+   "parent": null,
+   "props": {
+    "x": 540,
+    "y": 540,
+    "r": 760,
+    "fill": "#fff"
+   },
+   "keys": {
+    "scale": [
+     {
+      "t": 0.2,
+      "v": 0,
+      "ease": "inOutQuart"
+     },
+     {
+      "t": 1.4,
+      "v": 1
+     },
+     {
+      "t": 4.8,
+      "v": 1,
+      "ease": "inOutQuart"
+     },
+     {
+      "t": 5.8,
+      "v": 0
+     }
+    ]
+   }
+  },
+  {
+   "id": "panel",
+   "type": "rect",
+   "parent": null,
+   "props": {
+    "x": 540,
+    "y": 540,
+    "width": 1120,
+    "height": 1120,
+    "fill": {
+     "type": "linear",
+     "angle": 45,
+     "length": 1400,
+     "stops": [
+      [
+       0,
+       "#1d3557"
+      ],
+      [
+       1,
+       "#457b9d"
+      ]
+     ]
+    },
+    "clip": "revealMask"
+   }
+  },
+  {
+   "id": "tile0",
+   "type": "rect",
+   "parent": null,
+   "props": {
+    "x": 360,
+    "y": 360,
+    "width": 150,
+    "height": 150,
+    "radius": 28,
+    "fill": "#e63946",
+    "rotation": 45
+   },
+   "mods": [
+    {
+     "type": "spring",
+     "prop": "rotation",
+     "stiffness": 60,
+     "damping": 6
+    }
+   ],
+   "keys": {
+    "rotation": [
+     {
+      "t": 0,
+      "v": 45
+     },
+     {
+      "t": 1.6,
+      "v": 45,
+      "ease": "hold"
+     },
+     {
+      "t": 1.61,
+      "v": 0
+     }
+    ],
+    "y": [
+     {
+      "t": 1.2,
+      "v": 480,
+      "ease": "outBack"
+     },
+     {
+      "t": 1.9,
+      "v": 360
+     }
+    ],
+    "opacity": [
+     {
+      "t": 1.2,
+      "v": 0,
+      "ease": "outQuad"
+     },
+     {
+      "t": 1.6199999999999999,
+      "v": 1
+     },
+     {
+      "t": 4.4,
+      "v": 1,
+      "ease": "inQuad"
+     },
+     {
+      "t": 4.800000000000001,
+      "v": 0
+     }
+    ],
+    "scale": [
+     {
+      "t": 4.4,
+      "v": 1,
+      "ease": "inBack"
+     },
+     {
+      "t": 4.800000000000001,
+      "v": 0
+     }
+    ]
+   }
+  },
+  {
+   "id": "tile1",
+   "type": "rect",
+   "parent": null,
+   "props": {
+    "x": 720,
+    "y": 360,
+    "width": 150,
+    "height": 150,
+    "radius": 28,
+    "fill": "#f1faee",
+    "rotation": 45
+   },
+   "mods": [
+    {
+     "type": "spring",
+     "prop": "rotation",
+     "stiffness": 60,
+     "damping": 6
+    }
+   ],
+   "keys": {
+    "rotation": [
+     {
+      "t": 0,
+      "v": 45
+     },
+     {
+      "t": 1.7200000000000002,
+      "v": 45,
+      "ease": "hold"
+     },
+     {
+      "t": 1.73,
+      "v": 0
+     }
+    ],
+    "y": [
+     {
+      "t": 1.3199999999999998,
+      "v": 480,
+      "ease": "outBack"
+     },
+     {
+      "t": 2.0199999999999996,
+      "v": 360
+     }
+    ],
+    "opacity": [
+     {
+      "t": 1.3199999999999998,
+      "v": 0,
+      "ease": "outQuad"
+     },
+     {
+      "t": 1.7399999999999998,
+      "v": 1
+     },
+     {
+      "t": 4.4,
+      "v": 1,
+      "ease": "inQuad"
+     },
+     {
+      "t": 4.800000000000001,
+      "v": 0
+     }
+    ],
+    "scale": [
+     {
+      "t": 4.4,
+      "v": 1,
+      "ease": "inBack"
+     },
+     {
+      "t": 4.800000000000001,
+      "v": 0
+     }
+    ]
+   }
+  },
+  {
+   "id": "tile2",
+   "type": "rect",
+   "parent": null,
+   "props": {
+    "x": 360,
+    "y": 720,
+    "width": 150,
+    "height": 150,
+    "radius": 28,
+    "fill": "#a8dadc",
+    "rotation": 45
+   },
+   "mods": [
+    {
+     "type": "spring",
+     "prop": "rotation",
+     "stiffness": 60,
+     "damping": 6
+    }
+   ],
+   "keys": {
+    "rotation": [
+     {
+      "t": 0,
+      "v": 45
+     },
+     {
+      "t": 1.84,
+      "v": 45,
+      "ease": "hold"
+     },
+     {
+      "t": 1.85,
+      "v": 0
+     }
+    ],
+    "y": [
+     {
+      "t": 1.44,
+      "v": 840,
+      "ease": "outBack"
+     },
+     {
+      "t": 2.1399999999999997,
+      "v": 720
+     }
+    ],
+    "opacity": [
+     {
+      "t": 1.44,
+      "v": 0,
+      "ease": "outQuad"
+     },
+     {
+      "t": 1.8599999999999999,
+      "v": 1
+     },
+     {
+      "t": 4.4,
+      "v": 1,
+      "ease": "inQuad"
+     },
+     {
+      "t": 4.800000000000001,
+      "v": 0
+     }
+    ],
+    "scale": [
+     {
+      "t": 4.4,
+      "v": 1,
+      "ease": "inBack"
+     },
+     {
+      "t": 4.800000000000001,
+      "v": 0
+     }
+    ]
+   }
+  },
+  {
+   "id": "tile3",
+   "type": "rect",
+   "parent": null,
+   "props": {
+    "x": 720,
+    "y": 720,
+    "width": 150,
+    "height": 150,
+    "radius": 28,
+    "fill": "#ffb703",
+    "rotation": 45
+   },
+   "mods": [
+    {
+     "type": "spring",
+     "prop": "rotation",
+     "stiffness": 60,
+     "damping": 6
+    }
+   ],
+   "keys": {
+    "rotation": [
+     {
+      "t": 0,
+      "v": 45
+     },
+     {
+      "t": 1.96,
+      "v": 45,
+      "ease": "hold"
+     },
+     {
+      "t": 1.9700000000000002,
+      "v": 0
+     }
+    ],
+    "y": [
+     {
+      "t": 1.56,
+      "v": 840,
+      "ease": "outBack"
+     },
+     {
+      "t": 2.26,
+      "v": 720
+     }
+    ],
+    "opacity": [
+     {
+      "t": 1.56,
+      "v": 0,
+      "ease": "outQuad"
+     },
+     {
+      "t": 1.98,
+      "v": 1
+     },
+     {
+      "t": 4.4,
+      "v": 1,
+      "ease": "inQuad"
+     },
+     {
+      "t": 4.800000000000001,
+      "v": 0
+     }
+    ],
+    "scale": [
+     {
+      "t": 4.4,
+      "v": 1,
+      "ease": "inBack"
+     },
+     {
+      "t": 4.800000000000001,
+      "v": 0
+     }
+    ]
+   }
+  },
+  {
+   "id": "outline",
+   "type": "path",
+   "parent": null,
+   "props": {
+    "x": 540,
+    "y": 540,
+    "d": {
+     "shape": "circle",
+     "r": 300
+    },
+    "fill": "none",
+    "stroke": "#f1faee",
+    "strokeWidth": 10,
+    "rotation": -90
+   },
+   "keys": {
+    "trimEnd": [
+     {
+      "t": 1.4,
+      "v": 0,
+      "ease": "inOutCubic"
+     },
+     {
+      "t": 2.8,
+      "v": 1
+     }
+    ]
+   }
+  },
+  {
+   "id": "check",
+   "type": "path",
+   "parent": null,
+   "props": {
+    "x": 540,
+    "y": 540,
+    "d": "M-150 10 L-40 120 L170 -110",
+    "fill": "none",
+    "stroke": "#ffb703",
+    "strokeWidth": 34
+   },
+   "keys": {
+    "trimEnd": [
+     {
+      "t": 0,
+      "v": 0
+     },
+     {
+      "t": 4.6,
+      "v": 0,
+      "ease": "outQuart"
+     },
+     {
+      "t": 5.2,
+      "v": 1
+     }
+    ]
+   }
+  }
+ ]
+}

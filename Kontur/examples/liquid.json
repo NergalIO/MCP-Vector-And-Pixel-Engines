@@ -1,0 +1,283 @@
+{
+ "version": 1,
+ "width": 1920,
+ "height": 1080,
+ "duration": 12,
+ "fps": 60,
+ "background": "#07070c",
+ "loop": true,
+ "nodes": [
+  {
+   "id": "lines",
+   "type": "group",
+   "parent": null,
+   "props": {
+    "x": 0,
+    "y": 180
+   }
+  },
+  {
+   "id": "line",
+   "type": "path",
+   "parent": "lines",
+   "props": {
+    "points": [
+     [
+      -80,
+      0
+     ],
+     [
+      7,
+      0
+     ],
+     [
+      94,
+      0
+     ],
+     [
+      181,
+      0
+     ],
+     [
+      268,
+      0
+     ],
+     [
+      355,
+      0
+     ],
+     [
+      442,
+      0
+     ],
+     [
+      529,
+      0
+     ],
+     [
+      616,
+      0
+     ],
+     [
+      703,
+      0
+     ],
+     [
+      790,
+      0
+     ],
+     [
+      877,
+      0
+     ],
+     [
+      964,
+      0
+     ],
+     [
+      1051,
+      0
+     ],
+     [
+      1138,
+      0
+     ],
+     [
+      1225,
+      0
+     ],
+     [
+      1312,
+      0
+     ],
+     [
+      1399,
+      0
+     ],
+     [
+      1486,
+      0
+     ],
+     [
+      1573,
+      0
+     ],
+     [
+      1660,
+      0
+     ],
+     [
+      1747,
+      0
+     ],
+     [
+      1834,
+      0
+     ],
+     [
+      1921,
+      0
+     ],
+     [
+      2008,
+      0
+     ]
+    ],
+    "smooth": true,
+    "closed": false,
+    "strokeWidth": 3,
+    "stroke": {
+     "type": "linear",
+     "x1": 0,
+     "y1": 0,
+     "x2": 1920,
+     "y2": 0,
+     "stops": [
+      [
+       0,
+       "#ff4d6d"
+      ],
+      [
+       0.5,
+       "#ffb703"
+      ],
+      [
+       1,
+       "#3a86ff"
+      ]
+     ]
+    },
+    "repeat": {
+     "count": 40,
+     "y": 18,
+     "delay": 0.06
+    }
+   },
+   "keys": {
+    "trimEnd": [
+     {
+      "t": 0,
+      "v": 0,
+      "ease": "inOutQuart"
+     },
+     {
+      "t": 2.2,
+      "v": 1
+     }
+    ],
+    "trimStart": [
+     {
+      "t": 10,
+      "v": 0,
+      "ease": "inOutQuart"
+     },
+     {
+      "t": 12,
+      "v": 1
+     }
+    ]
+   },
+   "mods": [
+    {
+     "type": "deform",
+     "amount": 120,
+     "scale": 0.0028,
+     "speed": 0.22,
+     "seed": 4,
+     "detail": 24
+    },
+    {
+     "type": "noiseColor",
+     "prop": "stroke",
+     "amount": 0.3,
+     "speed": 0.2
+    }
+   ]
+  },
+  {
+   "id": "sun",
+   "type": "circle",
+   "parent": null,
+   "props": {
+    "x": 960,
+    "y": 540,
+    "r": 120,
+    "fill": {
+     "type": "radial",
+     "cx": -30,
+     "cy": -40,
+     "r": 170,
+     "stops": [
+      [
+       0,
+       "#fff1c1"
+      ],
+      [
+       0.6,
+       "#ffb703"
+      ],
+      [
+       1,
+       "#fb5607"
+      ]
+     ]
+    },
+    "glow": {
+     "blur": 50,
+     "color": "#ff8800",
+     "strength": 0.6
+    },
+    "blend": "screen"
+   },
+   "keys": {
+    "scale": [
+     {
+      "t": 0.5,
+      "v": 0,
+      "ease": {
+       "spring": {
+        "stiffness": 120,
+        "damping": 9
+       }
+      }
+     },
+     {
+      "t": 2.5,
+      "v": 1
+     },
+     {
+      "t": 10.2,
+      "v": 1,
+      "ease": "inBack"
+     },
+     {
+      "t": 11,
+      "v": 0
+     }
+    ]
+   },
+   "mods": [
+    {
+     "type": "wiggle",
+     "props": [
+      "x",
+      "y"
+     ],
+     "amp": [
+      80,
+      40
+     ],
+     "freq": 0.15,
+     "seed": 2
+    },
+    {
+     "type": "deform",
+     "amount": 6,
+     "scale": 0.02,
+     "speed": 1.2,
+     "detail": 16
+    }
+   ]
+  }
+ ]
+}

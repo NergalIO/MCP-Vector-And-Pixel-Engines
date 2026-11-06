@@ -1,0 +1,25 @@
+{
+  "name": "kontur",
+  "version": "0.1.0",
+  "description": "Движок векторной анимации: ключевые кадры, морфинг, процедурное движение, MCP-сервер",
+  "type": "module",
+  "main": "engine/kontur.js",
+  "bin": {
+    "kontur-mcp": "mcp/server.mjs",
+    "kontur-render": "scripts/render.mjs"
+  },
+  "scripts": {
+    "mcp": "node mcp/server.mjs",
+    "preview": "node mcp/server.mjs --preview --scene examples/flow.json",
+    "demos": "node examples/build-demos.mjs",
+    "test": "node scripts/test-mcp.mjs",
+    "build:page": "node scripts/build-artifact.mjs dist/kontur-studio.html"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@resvg/resvg-js": "2.6.2"
+  },
+  "license": "MIT"
+}

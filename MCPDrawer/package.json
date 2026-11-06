@@ -1,0 +1,14 @@
+{
+  "name": "pixelforge",
+  "version": "1.0.0",
+  "description": "Pixel-art sprite & animation editor with an MCP server for Claude",
+  "type": "module",
+  "private": true,
+  "bin": { "pixelforge-mcp": "src/mcp.js" },
+  "scripts": {
+    "start": "node src/server.js",
+    "mcp": "node src/mcp.js",
+    "test": "node test/smoke.js"
+  },
+  "engines": { "node": ">=18" }
+}

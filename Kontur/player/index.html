@@ -1,0 +1,418 @@
+<!doctype html>
+<title>Kontur Studio</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Монтажный стол: сцена в центре, слои и инспектор справа, таймлайн с дорожками ключей внизу. Тёмная тема — осознанно единственная. */
+:root {
+  --ink: #0e1017;        /* фон приложения */
+  --panel: #151823;      /* панели */
+  --raise: #1d2130;      /* поля, кнопки */
+  --line: #2a2f42;       /* разделители */
+  --text: #e4e6f0;
+  --mute: #8a90a8;
+  --accent: #9ea8ff;     /* выделение, плейхед */
+  --key: #ffc46b;        /* ключевые кадры */
+  --mod: #6fe0c4;        /* модификаторы */
+  --bad: #ff8a8a;
+  --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box }
+html, body { height: 100%; margin: 0 }
+body { background: var(--ink); color: var(--text); font: 13px/1.45 var(--sans); overflow: hidden }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--panel) }
+button, select, textarea, input { font: inherit; color: inherit }
+button { background: var(--raise); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer }
+button:hover { border-color: var(--accent) }
+button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px }
+select { background: var(--raise); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px }
+
+.app { height: 100%; display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: 1fr 320px; grid-template-areas: "top top" "stage side" "time time" }
+header { grid-area: top; display: flex; align-items: center; gap: 12px; padding-block: 8px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap }
+.brand { font-weight: 600; letter-spacing: .02em; display: flex; align-items: center; gap: 8px }
+.brand svg { display: block }
+.brand small { color: var(--mute); font-weight: 400; font-family: var(--mono); font-size: 11px }
+.spacer { flex: 1 }
+.live { font-family: var(--mono); font-size: 11px; color: var(--mute); display: flex; align-items: center; gap: 6px }
+.live i { width: 7px; height: 7px; border-radius: 50%; background: var(--mute) }
+.live.on i { background: var(--mod); box-shadow: 0 0 8px var(--mod) }
+
+.stage { grid-area: stage; position: relative; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 18px;
+  background: repeating-conic-gradient(#12141d 0 25%, #10121a 0 50%) 0 0 / 22px 22px }
+#view { width: 100%; max-height: 100%; box-shadow: 0 10px 40px rgba(0,0,0,.5); border-radius: 4px; overflow: hidden; max-width: 100% }
+.err { position: absolute; left: 18px; right: 18px; bottom: 18px; background: #2a1518; border: 1px solid var(--bad); color: var(--bad); padding: 8px 10px; border-radius: 6px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap }
+.meta { position: absolute; top: 10px; left: 18px; font-family: var(--mono); font-size: 11px; color: var(--mute) }
+
+aside { grid-area: side; background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0 }
+.tabs { display: flex; border-bottom: 1px solid var(--line) }
+.tabs button { flex: 1; border: 0; border-radius: 0; background: none; padding: 9px 4px; color: var(--mute); border-bottom: 2px solid transparent }
+.tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent) }
+.pane { flex: 1; overflow: auto; min-height: 0 }
+.layers { list-style: none; margin: 0; padding: 6px 0 }
+.layers li { display: flex; align-items: center; gap: 6px; padding: 4px 12px; cursor: pointer; white-space: nowrap }
+.layers li:hover { background: var(--raise) }
+.layers li.sel { background: #262b45 }
+.layers .ty { font-family: var(--mono); font-size: 10px; color: var(--mute); min-width: 46px }
+.layers .badges { margin-left: auto; display: flex; gap: 4px }
+.badge { font-family: var(--mono); font-size: 10px; padding: 0 5px; border-radius: 4px; border: 1px solid }
+.badge.k { color: var(--key); border-color: #5c4a2c }
+.badge.m { color: var(--mod); border-color: #2c5248 }
+.inspect { padding: 12px; display: grid; gap: 10px }
+.inspect h3 { margin: 0; font-size: 13px; font-weight: 600 }
+.inspect h4 { margin: 4px 0 0; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--mute); font-weight: 500 }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-family: var(--mono); font-size: 11.5px }
+.kv dt { color: var(--mute) } .kv dd { margin: 0; overflow-wrap: anywhere }
+.empty { color: var(--mute); padding: 16px 12px }
+.jsonpane { display: flex; flex-direction: column; height: 100%; padding: 10px; gap: 8px }
+textarea { flex: 1; min-height: 200px; width: 100%; resize: none; background: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: 11.5px/1.5 var(--mono); tab-size: 1 }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+.note { color: var(--mute); font-size: 12px }
+
+.timeline { grid-area: time; background: var(--panel); border-top: 1px solid var(--line); padding-block: 8px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-bottom: max(8px, env(safe-area-inset-bottom, 0px)) }
+.transport { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; flex-wrap: wrap }
+.play { width: 34px; height: 28px; padding: 0; display: grid; place-items: center }
+.clock { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 12px; min-width: 120px }
+.tracks { position: relative; display: grid; grid-template-columns: 110px 1fr; row-gap: 2px; user-select: none }
+.tracks .lbl { font-family: var(--mono); font-size: 11px; color: var(--mute); height: 18px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 8px }
+.lane { position: relative; height: 18px; background: var(--ink); border-radius: 3px; cursor: pointer }
+.lane.ruler { background: none; height: 34px; border-bottom: 1px solid var(--line); border-radius: 0 }
+.tick { position: absolute; bottom: 0; width: 1px; height: 4px; background: var(--line) }
+.tick span { position: absolute; bottom: 15px; left: 3px; font-family: var(--mono); font-size: 10px; color: var(--mute) }
+.kf { position: absolute; top: 4px; width: 9px; height: 9px; margin-left: -4.5px; background: var(--key); transform: rotate(45deg); border-radius: 1px }
+.cliprange { position: absolute; top: 20px; height: 10px; border-radius: 2px; background: rgba(158,168,255,.18); border: 1px solid rgba(158,168,255,.45); font-family: var(--mono); font-size: 9px; line-height: 8px; color: var(--accent); padding: 0 3px; overflow: hidden; white-space: nowrap; box-sizing: border-box; cursor: pointer }
+.cliprange.on { background: rgba(158,168,255,.42); color: var(--text) }
+.modbar { position: absolute; top: 7px; height: 4px; background: var(--mod); opacity: .55; border-radius: 2px }
+.seg { position: absolute; top: 8px; height: 2px; background: #6a5735 }
+.head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none }
+.tracks-scroll { max-height: 150px; overflow-y: auto; overflow-x: hidden }
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: auto minmax(220px, 45vh) auto 1fr; grid-template-areas: "top" "stage" "time" "side"; overflow: auto }
+  body { overflow: auto }
+  aside { border-left: 0; border-top: 1px solid var(--line); min-height: 280px }
+  .tracks { grid-template-columns: 78px 1fr }
+}
+@media (prefers-reduced-motion: reduce) { .live.on i { box-shadow: none } }
+</style>
+
+<div class="app">
+  <header>
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M3 11C3 5 8 3 11 3s8 3 8 8-4 8-8 8-8-3-8-8Z" fill="none" stroke="#9ea8ff" stroke-width="2"/><path d="M7 15 15 7" stroke="#ffc46b" stroke-width="2" stroke-linecap="round"/></svg>
+      Kontur <small id="ver"></small>
+    </div>
+    <label class="row" for="pick"><span class="note">Сцена</span>
+      <select id="pick"></select>
+    </label>
+    <div class="spacer"></div>
+    <div class="live" id="live" title="Соединение с MCP-сервером"><i></i><span>автономно</span></div>
+  </header>
+
+  <main class="stage" id="stage">
+    <div class="meta" id="meta"></div>
+    <div id="view" role="img" aria-label="Кадр анимации"></div>
+    <div class="err" id="err" hidden></div>
+  </main>
+
+  <aside>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-layers" aria-selected="true">Слои</button>
+      <button role="tab" id="tab-node" aria-selected="false">Инспектор</button>
+      <button role="tab" id="tab-json" aria-selected="false">JSON</button>
+    </div>
+    <div class="pane" id="pane-layers"><ul class="layers" id="layers"></ul></div>
+    <div class="pane" id="pane-node" hidden><div class="inspect" id="inspect"></div></div>
+    <div class="pane" id="pane-json" hidden>
+      <div class="jsonpane">
+        <textarea id="json" spellcheck="false" aria-label="JSON сцены"></textarea>
+        <div class="row">
+          <button id="apply">Применить</button>
+          <span class="note" id="jsonmsg">Правка JSON сразу пересобирает сцену.</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <section class="timeline">
+    <div class="transport">
+      <button class="play" id="play" aria-label="Пауза">❚❚</button>
+      <span class="clock" id="clock">0.00 / 0.00 s</span>
+      <label class="row" for="clip"><span class="note">Клип</span>
+        <select id="clip"><option value="">Вся шкала</option></select>
+      </label>
+      <label class="row" for="speed"><span class="note">Скорость</span>
+        <select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+      </label>
+      <label class="row note" for="loop"><input type="checkbox" id="loop" checked> Повтор</label>
+      <label class="row note" for="dither" title="Растр вместо плоской заливки у слоёв-теней (shade)"><input type="checkbox" id="dither"> Дизеринг теней</label>
+      <select id="dpat" aria-label="Узор дизеринга"><option value="bayer4">Bayer 4×4</option><option value="bayer2">Bayer 2×2</option><option value="bayer8">Bayer 8×8</option><option value="dots">Точки</option><option value="lines">Линии</option><option value="diagonal">Диагональ</option></select>
+      <select id="dcell" aria-label="Размер точки растра"><option value="2">2 px</option><option value="3" selected>3 px</option><option value="4">4 px</option><option value="6">6 px</option></select>
+      <span class="spacer"></span>
+      <span class="note" id="selname"></span>
+    </div>
+    <div class="tracks-scroll">
+      <div class="tracks" id="tracks"></div>
+    </div>
+  </section>
+</div>
+
+<script type="module">
+const K = window.Kontur || await import('../engine/kontur.js');
+const { Player, validateScene, invalidate } = K;
+const $ = (id) => document.getElementById(id);
+$('ver').textContent = 'v' + K.VERSION;
+
+/* ---- источники сцен: живой сервер, встроенные примеры, файлы примеров ---- */
+const EMBED = window.KONTUR_EXAMPLES || null;     // {name: scene} в автономной сборке
+let live = false, rev = -1;
+const examples = {};
+async function tryLive() {
+  if (!location.protocol.startsWith('http') || EMBED) return null;
+  try { const r = await fetch('/scene.json', { cache: 'no-store' }); if (!r.ok) return null; return await r.json(); } catch { return null; }
+}
+const liveData = await tryLive();
+if (EMBED) Object.assign(examples, EMBED);
+else for (const n of ['bay', 'flow', 'liquid', 'reveal']) {
+  try {
+    const r = await fetch(`../examples/${n}.json`);
+    if (r.ok) {
+      const sc = await r.json();
+      for (const nd of sc.nodes) if (nd.type === 'image' && nd.props?.src && !/^(data:|https?:|blob:|\/)/.test(nd.props.src)) nd.props.src = `../examples/${nd.props.src}`;
+      examples[n] = sc;
+    }
+  } catch {}
+}
+const NAMES = { bay: 'Ремонтный отсек станции', flow: 'Поток — морфинг и частицы', liquid: 'Жидкие линии', reveal: 'Раскрытие логотипа' };
+const pick = $('pick');
+if (liveData) pick.append(new Option('Текущая (MCP)', '__live'));
+for (const k of Object.keys(examples)) pick.append(new Option(NAMES[k] || k, k));
+
+let scene = liveData ? liveData.scene : examples[Object.keys(examples)[0]] || K.createScene();
+if (liveData) { live = true; rev = liveData.rev; }
+let selected = null;
+
+const player = new Player($('view'), scene, { autoplay: !matchMedia('(prefers-reduced-motion: reduce)').matches });
+fitView();
+queueMicrotask(() => { syncClips(); syncDither(); });
+
+/* ---- SSE ---- */
+function connect() {
+  const es = new EventSource('/events');
+  es.addEventListener('scene', async (e) => {
+    if (+e.data === rev || pick.value !== '__live') return;
+    const r = await fetch('/scene.json', { cache: 'no-store' }); const d = await r.json();
+    rev = d.rev; setScene(d.scene, true);
+  });
+  es.onopen = () => setLive(true);
+  es.onerror = () => setLive(false);
+}
+function setLive(on) { $('live').classList.toggle('on', on); $('live').querySelector('span').textContent = on ? 'MCP · живое превью' : (live ? 'нет связи' : 'автономно'); }
+if (live) connect();
+
+pick.onchange = async () => {
+  if (pick.value === '__live') { const r = await fetch('/scene.json', { cache: 'no-store' }); const d = await r.json(); rev = d.rev; setScene(d.scene, false); }
+  else setScene(structuredClone(examples[pick.value]), false);
+};
+
+function setScene(s, keepTime) {
+  scene = s;
+  if (selected && !scene.nodes.some((n) => n.id === selected)) selected = null;
+  player.setScene(scene, keepTime);
+  player.loop = $('loop').checked;
+  syncClips();
+  fitView(); renderLayers(); renderInspect(); renderTracks(); fillJSON(); syncDither();
+}
+
+/* ---- клипы ---- */
+function syncClips() {
+  const sel = $('clip'), cur = sel.value;
+  sel.innerHTML = '<option value="">Вся шкала</option>';
+  for (const c of scene.clips || []) sel.append(new Option(`${c.name} · ${c.start}–${c.end}s`, c.name));
+  sel.value = (scene.clips || []).some((c) => c.name === cur) ? cur : '';
+  sel.disabled = !(scene.clips || []).length;
+  try { player.setClip(sel.value || null); } catch { player.setClip(null); }
+}
+$('clip').onchange = () => { player.setClip($('clip').value || null); player.play(); renderTracks(); };
+
+/* ---- дизеринг теней ---- */
+const hasShade = () => scene.nodes.some((n) => n.props?.shade);
+function syncDither() {
+  const d = scene.dither || {};
+  $('dither').checked = !!d.enabled;
+  $('dpat').value = d.pattern || 'bayer4';
+  $('dcell').value = String(d.cell || 3);
+  $('dpat').disabled = $('dcell').disabled = !d.enabled;
+  $('dither').disabled = !hasShade() && !d.enabled;
+  $('dither').parentElement.title = hasShade() ? 'Растр вместо плоской заливки у слоёв-теней (shade)' : 'В этой сцене нет слоёв-теней (shade: true)';
+}
+async function changeDither() {
+  scene.dither = { pattern: 'bayer4', cell: 3, density: 0.6, angle: 90, ...(scene.dither || {}), enabled: $('dither').checked, pattern: $('dpat').value, cell: +$('dcell').value };
+  if (live && pick.value === '__live') await fetch('/scene.json', { method: 'POST', body: JSON.stringify(scene) });
+  setScene(scene, true);
+}
+for (const id of ['dither', 'dpat', 'dcell']) $(id).onchange = changeDither;
+
+/* ---- размер сцены по пропорциям ---- */
+function fitView() {
+  const st = $('stage'), v = $('view');
+  const aw = st.clientWidth - 36, ah = st.clientHeight - 36, ar = scene.width / scene.height;
+  const w = Math.max(50, Math.min(aw, ah * ar));
+  v.style.width = w + 'px'; v.style.height = w / ar + 'px';
+  $('meta').textContent = `${scene.width}×${scene.height} · ${scene.fps} fps · узлов ${scene.nodes.length}`;
+}
+new ResizeObserver(fitView).observe($('stage'));
+
+/* ---- транспорт ---- */
+const fmt = (t) => t.toFixed(2);
+player.on((t) => {
+  $('clock').textContent = `${fmt(t)} / ${fmt(scene.duration)} s`;
+  const cn = player.clip?.name || '';
+  if ($('clip').value !== cn && (scene.clips || []).length) { $('clip').value = cn; for (const b of document.querySelectorAll('.cliprange')) b.classList.toggle('on', b.textContent === cn); }
+  $('play').textContent = player.playing ? '❚❚' : '▶';
+  $('play').setAttribute('aria-label', player.playing ? 'Пауза' : 'Воспроизвести');
+  for (const h of document.querySelectorAll('.head')) h.style.left = (t / scene.duration) * 100 + '%';
+  const e = $('err');
+  if (player.error) { e.hidden = false; e.textContent = 'Ошибка вычисления кадра: ' + player.error.message; } else e.hidden = true;
+});
+$('play').onclick = () => player.toggle();
+$('speed').onchange = (e) => (player.speed = +e.target.value);
+$('loop').onchange = (e) => (player.loop = e.target.checked);
+addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space') { e.preventDefault(); player.toggle(); }
+  if (e.code === 'ArrowLeft') { player.pause(); player.seek(player.time - (e.shiftKey ? 1 : 1 / scene.fps)); }
+  if (e.code === 'ArrowRight') { player.pause(); player.seek(player.time + (e.shiftKey ? 1 : 1 / scene.fps)); }
+});
+
+/* ---- вкладки ---- */
+const tabs = ['layers', 'node', 'json'];
+function showTab(name) {
+  for (const t of tabs) { $('tab-' + t).setAttribute('aria-selected', t === name); $('pane-' + t).hidden = t !== name; }
+  if (name === 'json') fillJSON();
+}
+for (const t of tabs) $('tab-' + t).onclick = () => showTab(t);
+
+/* ---- слои ---- */
+function renderLayers() {
+  const ul = $('layers'); ul.innerHTML = '';
+  const kids = new Map();
+  for (const n of scene.nodes) { const p = n.parent ?? null; if (!kids.has(p)) kids.set(p, []); kids.get(p).push(n); }
+  const walk = (p, depth) => {
+    for (const n of [...(kids.get(p) || [])].reverse()) {
+      const li = document.createElement('li');
+      li.tabIndex = 0;
+      li.style.paddingLeft = 12 + depth * 14 + 'px';
+      if (n.id === selected) li.className = 'sel';
+      const k = n.keys ? Object.keys(n.keys).length : 0, m = n.mods?.length || 0;
+      li.innerHTML = `<span class="ty"></span><span class="nm"></span><span class="badges">${k ? `<span class="badge k">${k} ключ.</span>` : ''}${m ? `<span class="badge m">${m} мод.</span>` : ''}</span>`;
+      li.querySelector('.ty').textContent = n.type;
+      li.querySelector('.nm').textContent = n.id + (n.props?.repeat ? ` ×${n.props.repeat.count}` : '');
+      const sel = () => { selected = n.id; renderLayers(); renderInspect(); renderTracks(); };
+      li.onclick = sel; li.onkeydown = (e) => { if (e.key === 'Enter') { sel(); showTab('node'); } };
+      li.ondblclick = () => showTab('node');
+      ul.append(li);
+      walk(n.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+}
+
+/* ---- инспектор ---- */
+const short = (v) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s.length > 90 ? s.slice(0, 87) + '…' : s; };
+function renderInspect() {
+  const el = $('inspect');
+  const n = scene.nodes.find((x) => x.id === selected);
+  $('selname').textContent = n ? `Выбран: ${n.id}` : 'Выберите слой, чтобы увидеть его дорожки';
+  if (!n) { el.innerHTML = '<div class="empty">Выберите слой во вкладке «Слои».</div>'; return; }
+  const dl = (obj) => '<dl class="kv">' + Object.entries(obj).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(short(v))}</dd>`).join('') + '</dl>';
+  let h = `<h3>${esc(n.id)} <span class="note">· ${esc(n.type)}${n.parent ? ' в ' + esc(n.parent) : ''}</span></h3>`;
+  h += `<h4>Свойства</h4>` + (Object.keys(n.props || {}).length ? dl(n.props) : '<span class="note">по умолчанию</span>');
+  if (n.keys) h += `<h4>Ключевые кадры</h4>` + dl(Object.fromEntries(Object.entries(n.keys).map(([k, a]) => [k, a.map((x) => `${x.t}s`).join(' · ')])));
+  if (n.mods) h += `<h4>Модификаторы</h4>` + dl(Object.fromEntries(n.mods.map((m, i) => [`${i}: ${m.type}`, Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'type'))])));
+  el.innerHTML = h;
+}
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+/* ---- дорожки ---- */
+function renderTracks() {
+  const tr = $('tracks'); tr.innerHTML = '';
+  const D = scene.duration, pct = (t) => (Math.max(0, Math.min(D, t)) / D) * 100 + '%';
+  const lane = (label, cls = '') => {
+    const l = document.createElement('div'); l.className = 'lbl'; l.textContent = label; l.title = label;
+    const ln = document.createElement('div'); ln.className = 'lane ' + cls;
+    const head = document.createElement('div'); head.className = 'head'; ln.append(head);
+    tr.append(l, ln); return ln;
+  };
+  const ruler = lane('', 'ruler');
+  const step = D <= 4 ? 0.5 : D <= 12 ? 1 : D <= 30 ? 2 : 5;
+  for (let t = 0; t <= D + 1e-9; t += step) { const k = document.createElement('div'); k.className = 'tick'; k.style.left = pct(t); k.innerHTML = `<span>${+t.toFixed(1)}s</span>`; ruler.append(k); }
+  for (const c of scene.clips || []) {
+    const b = document.createElement('div'); b.className = 'cliprange' + ($('clip').value === c.name ? ' on' : '');
+    b.style.left = pct(c.start); b.style.width = ((Math.min(D, c.end) - c.start) / D) * 100 + '%';
+    b.textContent = c.name; b.title = `${c.name}: ${c.start}–${c.end}s`;
+    b.onpointerdown = (e) => { e.stopPropagation(); $('clip').value = c.name; $('clip').onchange(); };
+    ruler.append(b);
+  }
+  const n = scene.nodes.find((x) => x.id === selected);
+  const rows = [];
+  if (n) {
+    for (const [p, keys] of Object.entries(n.keys || {})) rows.push({ label: p, keys });
+    for (const m of n.mods || []) rows.push({ label: '∿ ' + m.type, mod: m });
+  } else {
+    for (const x of scene.nodes) if (x.keys) rows.push({ label: x.id, keys: Object.values(x.keys).flat(), node: x.id });
+  }
+  for (const r of rows.slice(0, 40)) {
+    const ln = lane(r.label);
+    if (r.keys) {
+      const ts = [...new Set(r.keys.map((k) => k.t))].sort((a, b) => a - b);
+      if (ts.length > 1) { const s = document.createElement('div'); s.className = 'seg'; s.style.left = pct(ts[0]); s.style.width = ((ts[ts.length - 1] - ts[0]) / D) * 100 + '%'; ln.append(s); }
+      for (const t of ts) { const d = document.createElement('div'); d.className = 'kf'; d.style.left = pct(t); d.title = `${t}s`; ln.append(d); }
+      if (r.node) ln.ondblclick = () => { selected = r.node; renderLayers(); renderInspect(); renderTracks(); };
+    } else {
+      const b = document.createElement('div'); b.className = 'modbar';
+      const s = r.mod.start ?? 0, e = r.mod.end ?? D;
+      b.style.left = pct(s); b.style.width = ((Math.min(D, e) - s) / D) * 100 + '%'; ln.append(b);
+    }
+  }
+  // перетаскивание плейхеда
+  for (const ln of tr.querySelectorAll('.lane')) {
+    ln.onpointerdown = (e) => {
+      ln.setPointerCapture(e.pointerId); player.pause();
+      const move = (ev) => { const r = ln.getBoundingClientRect(); player.seek(((ev.clientX - r.left) / r.width) * D); };
+      move(e); ln.onpointermove = move; ln.onpointerup = () => (ln.onpointermove = null);
+    };
+  }
+  player.draw();
+}
+
+/* ---- JSON ---- */
+function fillJSON() { if (!$('pane-json').hidden) $('json').value = JSON.stringify(scene, null, 1); }
+$('apply').onclick = async () => {
+  const msg = $('jsonmsg');
+  let s;
+  try { s = JSON.parse($('json').value); } catch (e) { msg.textContent = 'JSON не разобран: ' + e.message; msg.style.color = 'var(--bad)'; return; }
+  const errs = validateScene(s);
+  if (errs.length) { msg.textContent = errs.slice(0, 3).join('; '); msg.style.color = 'var(--bad)'; return; }
+  msg.style.color = '';
+  if (live && pick.value === '__live') {
+    const r = await fetch('/scene.json', { method: 'POST', body: JSON.stringify(s) });
+    msg.textContent = r.ok ? 'Сохранено на сервере.' : 'Сервер отклонил: ' + (await r.text());
+  } else { setScene(s, true); msg.textContent = 'Применено.'; }
+};
+
+/* перетаскивание файла сцены */
+addEventListener('dragover', (e) => e.preventDefault());
+addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0]; if (!f) return;
+  try { const s = JSON.parse(await f.text()); const errs = validateScene(s); if (errs.length) throw new Error(errs[0]); setScene(s, false); }
+  catch (err) { $('err').hidden = false; $('err').textContent = 'Файл не подошёл: ' + err.message; }
+});
+
+renderLayers(); renderInspect(); renderTracks();
+</script>
