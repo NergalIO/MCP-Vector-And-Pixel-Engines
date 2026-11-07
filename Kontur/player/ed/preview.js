@@ -1,4 +1,5 @@
 // Превью пикселей и света: кадр растрируется в браузере; свет считается шейдером по карте высот (как 2D-свет Godot).
+// «Отложенный свет» 2.5D-сцены (camera3d + surface) считается на сервере: GET /lit.png.
 import { K, E, on, emit } from './core.js';
 import { canvasBox } from './view.js';
 
@@ -9,7 +10,7 @@ let busy = false, again = false, srcCache = new Map(), mapped = null, mappedVer 
 
 on('frame preview scene view previewmode states', schedule);
 export function schedule() {
-  const on = E.pixelPreview || E.lightPreview;
+  const on = E.pixelPreview || E.lightPreview || E.deferredPreview;
   canvasBox.classList.toggle('ghost', on);
   pv.style.display = on ? 'block' : 'none';
   if (!on) return;
@@ -20,7 +21,7 @@ export function schedule() {
 }
 function place() {
   Object.assign(pv.style, { left: E.panX + 'px', top: E.panY + 'px', width: E.scene.width * E.zoom + 'px', height: E.scene.height * E.zoom + 'px' });
-  pv.classList.toggle('pixel', !!E.pixelPreview);
+  pv.classList.toggle('pixel', !!E.pixelPreview && !E.deferredPreview);
 }
 
 /** Картинки сцены — внутрь SVG (картинка-SVG не грузит внешние файлы). */
@@ -46,7 +47,24 @@ async function raster(svg, w, h) {
   } finally { URL.revokeObjectURL(url); }
 }
 
+let litKey = '', litTimer = null;
+/** Кадр с отложенным светом с сервера: не чаще, чем раз в 0.35 с и только при смене кадра/сцены. */
+async function runDeferred() {
+  const W = E.scene.width;
+  const w = Math.max(160, Math.min(1920, Math.round(W * E.zoom * Math.min(2, devicePixelRatio || 1))));
+  const q = `t=${E.t.toFixed(3)}&w=${w}&v=${E.ver}${E.states && Object.keys(E.states).length ? '&states=' + encodeURIComponent(JSON.stringify(E.states)) : ''}`;
+  if (q === litKey) return;
+  await new Promise((r) => { clearTimeout(litTimer); litTimer = setTimeout(r, 350); });
+  const r = await fetch('/lit.png?' + q);
+  if (!r.ok) { const msg = await r.text(); E.deferredPreview = false; emit('previewmode'); emit('toast', 'Отложенный свет: ' + msg.slice(0, 200)); return; }
+  const img = await createImageBitmap(await r.blob());
+  litKey = q;
+  pv.width = img.width; pv.height = img.height;
+  ctx2.drawImage(img, 0, 0);
+}
+
 async function run() {
+  if (E.deferredPreview) return runDeferred();
   const s = await inlineScene(), W = E.scene.width, H = E.scene.height;
   const px = E.pixelPreview ? (K.pixelOf(E.scene) || { size: Math.max(2, Math.round(W / 320)) }) : null;
   const w = px ? Math.max(8, Math.round(W / px.size)) : Math.max(64, Math.min(1400, Math.round(W * E.zoom * Math.min(2, devicePixelRatio || 1))));

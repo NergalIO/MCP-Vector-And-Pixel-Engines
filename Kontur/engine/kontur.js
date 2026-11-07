@@ -941,6 +941,109 @@ function heightFilter(ctx, rel, isImage, region = null) {
   return ctx.share(key, def);
 }
 
+/* ---------- поверхности и проходы отложенного света ----------
+ * surface узла: { normal, tilt: [du, dv, k], plane: [nx, ny, nz, d], u, v, spec, emissive, base, bump, ink, sw, tag, sky }.
+ * normal — нормаль для света (может быть наклонена: рельеф), plane — плоскость n·P = d для восстановления позиции.
+ * Наследуются детьми: plane, normal, u, v, spec, emissive, tag, sky. Только свои: base, bump, ink, sw, tilt.
+ */
+export const PASS_MODES = ['normal', 'plane', 'planeD', 'emissive', 'ink', 'cover'];
+/** Фон проходов: данные — прозрачный, свечение и маски — чёрный, контур — белый. */
+const PASS_BG = { normal: null, plane: null, planeD: null, emissive: '#000000', ink: '#ffffff', cover: '#000000' };
+const isPassMode = (m) => PASS_MODES.includes(m) || (typeof m === 'string' && m.startsWith('mask:') && m.length > 5);
+const SURF_INHERIT = ['plane', 'normal', 'u', 'v', 'spec', 'emissive', 'tag', 'sky'];
+const v3 = {
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  mul: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+};
+export const vec3 = v3;
+const isVec3 = (a) => Array.isArray(a) && a.length >= 3 && a.slice(0, 3).every((x) => typeof x === 'number' && Number.isFinite(x));
+/** Оси грани по нормали: u — «вдоль» (горизонталь), v — «вверх по грани». Для пола u = X, v = +Z (вглубь). */
+export function surfaceAxes(n) {
+  n = v3.norm(n);
+  let u = v3.cross(n, [0, 1, 0]);
+  if (Math.hypot(...u) < 1e-4) return { u: [1, 0, 0], v: n[1] > 0 ? [0, 0, 1] : [0, 0, -1] };
+  u = v3.norm(u);
+  return { u, v: v3.norm(v3.cross(u, n)) };
+}
+/** Действующая поверхность узла: наследуемое от предков + своё. own === false — узел без поверхности. */
+export function resolveSurface(parent, own) {
+  if (own === false) return null;
+  const s = {};
+  if (parent) for (const k of SURF_INHERIT) if (parent[k] !== undefined) s[k] = parent[k];
+  const has = own && typeof own === 'object';
+  if (!has && !parent) return null;
+  if (has) for (const k in own) if (k !== 'tilt') s[k] = own[k];
+  if (has && own.plane === 'inherit') s.plane = parent?.plane;
+  if (s.plane && !isVec3(s.plane)) delete s.plane;
+  const pn = s.plane ? v3.norm(s.plane) : null;
+  if (s.normal && !isVec3(s.normal)) delete s.normal;
+  if (has && Array.isArray(own.tilt)) {
+    const n0 = v3.norm(own.normal || parent?.normal || pn || [0, 0, -1]);
+    const ax = surfaceAxes(pn || n0);
+    const u = isVec3(s.u) ? s.u : ax.u, v = isVec3(s.v) ? s.v : ax.v;
+    const [du = 0, dv = 0, k = 0.75] = own.tilt;
+    s.normal = v3.norm(v3.add(n0, v3.add(v3.mul(u, du * k), v3.mul(v, dv * k))));
+  }
+  if (!s.normal && pn) s.normal = pn;
+  if (s.normal) s.normal = v3.norm(s.normal);
+  s.base = !!(has && own.base);
+  s.bump = has ? (own.bump ?? !!(own.normal || own.tilt)) : false;
+  s.ink = !!(has && own.ink);
+  if (!has || own.sw == null) delete s.sw;
+  return s;
+}
+const hex2 = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+/** Нормаль → цвет: rgb((n·0.5 + 0.5)·255). */
+export const encodeNormal = (n) => '#' + [0, 1, 2].map((i) => hex2((clamp(n[i], -1, 1) * 0.5 + 0.5) * 255)).join('');
+/** d плоскости 16 бит (R старший, G младший байт: q = round((d + 200)·100)) и сила блика в B. */
+export function encodePlaneD(d, spec = 0.1) {
+  const q = clamp(Math.round((d + 200) * 100), 0, 65535);
+  return '#' + hex2(q >> 8) + hex2(q & 255) + hex2(clamp(spec) * 255);
+}
+const isMaskTag = (s, tag) => s && (s.tag === tag || (Array.isArray(s.tag) && s.tag.includes(tag)));
+/**
+ * Цвет фигуры в проходе (null — не рисовать). op — итоговая непрозрачность.
+ * Узел без surface: в проходах данных не пишется (освещается как поверхность за ним), в emissive/mask/ink — перекрывает.
+ */
+function dataPaint(ctx, s, op) {
+  const m = ctx.mode, opaque = op >= 0.999, half = op >= 0.5;
+  if (!s) {
+    if (m === 'ink') return opaque ? '#ffffff' : null;
+    if (m === 'cover') return half ? '#ffffff' : null;
+    if (m === 'emissive' || ctx.maskTag) return opaque ? '#000000' : null;
+    return null;
+  }
+  switch (m) {
+    case 'normal': return (s.base || s.bump) && half && s.normal ? encodeNormal(s.normal) : null;
+    case 'plane': return s.base && s.plane ? encodeNormal(v3.norm(s.plane)) : null;
+    case 'planeD': return (s.base || (s.bump && half)) && s.plane ? encodePlaneD(s.plane[3], s.spec ?? 0.1) : null;
+    case 'emissive': return s.emissive && s.emissive !== 'none' ? s.emissive : s.base || opaque ? '#000000' : null;
+    case 'ink': return s.base ? '#ffffff' : null;
+    case 'cover': return s.sky ? null : s.base || half ? '#ffffff' : null;
+    default: return isMaskTag(s, ctx.maskTag) ? '#ffffff' : s.base || opaque ? '#000000' : null;
+  }
+}
+/** Фильтр «залить цветом по альфе» — для картинок в проходах. */
+function floodFilter(ctx, color, region) {
+  const key = `fl|${color}|${region.join(',')}`;
+  if (ctx.patterns.has(key)) return ctx.reuse(key);
+  const id = `${ctx.prefix}-fl${hashStr(key)}`;
+  return ctx.share(key, { tag: 'filter', attrs: { id, filterUnits: 'userSpaceOnUse', x: fmt(region[0]), y: fmt(region[1]), width: fmt(region[2]), height: fmt(region[3]), 'color-interpolation-filters': 'sRGB' },
+    children: [{ tag: 'feFlood', attrs: { 'flood-color': color, result: 'c' } }, { tag: 'feComposite', attrs: { in: 'c', in2: 'SourceAlpha', operator: 'in' } }] });
+}
+/** Габариты геометрии по опорным точкам (для отбрасывания вырожденных фигур). */
+function geomBox(geom) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const sp of geom) {
+    if (sp.x0 < x0) x0 = sp.x0; if (sp.x0 > x1) x1 = sp.x0; if (sp.y0 < y0) y0 = sp.y0; if (sp.y0 > y1) y1 = sp.y0;
+    for (const c of sp.segs) for (let i = 0; i < 6; i += 2) { if (c[i] < x0) x0 = c[i]; if (c[i] > x1) x1 = c[i]; if (c[i + 1] < y0) y0 = c[i + 1]; if (c[i + 1] > y1) y1 = c[i + 1]; }
+  }
+  return Number.isFinite(x0) ? [x1 - x0, y1 - y0] : [0, 0];
+}
+
 class Ctx {
   constructor(scene, opts = {}) {
     this.scene = scene;
@@ -951,6 +1054,11 @@ class Ctx {
     this.inRepeat = new Set();
     this.patterns = new Map();
     this.mode = opts.mode || 'color';
+    if (this.mode !== 'color' && this.mode !== 'height' && !isPassMode(this.mode)) throw new Error(`Неизвестный режим рендера: ${this.mode} (есть color, height, ${PASS_MODES.join(', ')}, mask:<метка>)`);
+    // проходы отложенного света: данные о поверхности вместо цвета (см. dataPaint)
+    this.data = isPassMode(this.mode);
+    this.maskTag = this.mode.startsWith('mask:') ? this.mode.slice(5) : null;
+    this.surfCur = null; this.opCur = 1; this.scaleCur = 1;
     this.relief = { ...RELIEF_DEFAULT, ...(scene.relief || {}), ...(opts.relief || {}) };
     this.inClip = 0;
     this.defIds = new Set();
@@ -1362,11 +1470,22 @@ function evalNode(node, t, ctx, key, copy, extraScale = 1) {
     }
     rel = { ...(ctx.reliefCur || ctx.relief), ...(r && typeof r === 'object' ? r : {}) };
   }
-  const opacity = H ? 1 : Pt('opacity');
+  // проходы отложенного света: поверхность (наследуется) и накопленная непрозрачность вместо атрибута opacity
+  const D = ctx.data && !ctx.inClip;
+  let surf = null, opAcc = 1;
+  if (D) {
+    surf = resolveSurface(ctx.surfCur, Pt('surface'));
+    opAcc = ctx.opCur * clamp(Pt('opacity'));
+    if (opAcc <= 0.0005) return null;
+    const bl = Pt('blend');
+    if (bl && bl !== 'normal' && !surf) return null;   // фактуры и засветки в режиме наложения — только в цвете
+  }
+  const opacity = H || D ? 1 : Pt('opacity');
   if (opacity <= 0.0005 && !p.keepHidden) return null;
 
   const x = Pt('x'), y = Pt('y'), rot = Pt('rotation'), sc = Pt('scale') * extraScale;
   const sx = sc * Pt('scaleX'), sy = sc * Pt('scaleY'), skx = Pt('skewX'), ax = Pt('anchorX'), ay = Pt('anchorY');
+  const scaleHere = ctx.scaleCur * (Math.sqrt(Math.abs(sx * sy)) || 0);
   let tf = '';
   if (x || y) tf += `translate(${fmt(x)} ${fmt(y)})`;
   if (rot) tf += ` rotate(${fmt(rot)})`;
@@ -1375,11 +1494,12 @@ function evalNode(node, t, ctx, key, copy, extraScale = 1) {
   if (ax || ay) tf += ` translate(${fmt(-ax)} ${fmt(-ay)})`;
 
   const nkey = `${node.id}${key}`;
-  const g = { tag: 'g', attrs: { 'data-node': node.id, transform: tf.trim() || null, opacity: fmt(clamp(opacity)) }, children: [] };
+  // opacity = 1 не пишется: у resvg элемент с opacity целиком за кадром ломает рендер
+  const g = { tag: 'g', attrs: { 'data-node': node.id, transform: tf.trim() || null, opacity: opacity < 1 ? fmt(clamp(opacity)) : null }, children: [] };
 
   // фильтры
   const blur = Pt('blur'), shadow = Pt('shadow'), glow = Pt('glow');
-  if (!H && !skipOwn && (blur > 0.01 || shadow || glow)) {
+  if (!H && !D && !skipOwn && (blur > 0.01 || shadow || glow)) {
     const fid = ctx.id(nkey, 'f');
     const prims = [];
     let src = 'SourceGraphic';
@@ -1400,28 +1520,49 @@ function evalNode(node, t, ctx, key, copy, extraScale = 1) {
     g.attrs.filter = `url(#${fid})`;
   }
   const blend = Pt('blend');
-  if (!H && !skipOwn && blend && blend !== 'normal') g.attrs.style = `mix-blend-mode:${blend}`;
+  if (!H && !D && !skipOwn && blend && blend !== 'normal') g.attrs.style = `mix-blend-mode:${blend}`;
+  const kids = ctx.c.children.get(node.id) || [];
 
   // собственная фигура
   if (skipOwn) {
     // предок выбранных узлов: только трансформация
   } else if (node.type === 'image') {
     const el = imageElement(node, Pt, T, ctx, nkey);
+    const w = Pt('width'), h = Pt('height');
     // фильтр высоты — на обёртке: у кадра спрайт-листа (вложенный <svg>) фильтр иначе видит весь лист
-    if (H) {
-      const w = Pt('width'), h = Pt('height');
-      g.children.push({ tag: 'g', attrs: { filter: heightFilter(ctx, rel, true, [-w / 2, -h / 2, w, h]) }, children: [el] });
+    if (H) g.children.push({ tag: 'g', attrs: { filter: heightFilter(ctx, rel, true, [-w / 2, -h / 2, w, h]) }, children: [el] });
+    else if (D) {
+      // картинка с поверхностью — «тело» (персонаж, спрайт): заливка цветом прохода по альфе
+      const col = dataPaint(ctx, surf ? { ...surf, base: surf.base || !surf.bump } : null, opAcc);
+      if (col) g.children.push({ tag: 'g', attrs: { filter: floodFilter(ctx, col, [-w / 2, -h / 2, w, h]) }, children: [el] });
     }
     else g.children.push(el);
   } else if (node.type === 'light') {
     // источник света ничего не рисует: его собирает collectLights
   } else if (node.type !== 'group') {
-    const dith = H ? null : effectiveDither(node, Pt, ctx);
+    const dith = H || D ? null : effectiveDither(node, Pt, ctx);
     const hv = H ? grayHex(rel.height) : null;
     const rawFill = Pt('fill'), rawStroke = Pt('stroke');
-    const fill = H ? (rawFill && rawFill !== 'none' ? hv : 'none') : dith ? 'none' : paintAttr(rawFill, nkey, 'fg', ctx);
-    const stroke = H ? (rawStroke && rawStroke !== 'none' ? hv : 'none') : paintAttr(rawStroke, nkey, 'sg', ctx);
-    const sw = Pt('strokeWidth');
+    let fill, stroke, sw = Pt('strokeWidth');
+    if (D) {
+      // проход: цвет данных; у фигуры без заливки (линии) — только контур (ink) и покрытие (cover)
+      const hasFill = paintAlpha(rawFill) > 0, hasStroke = paintAlpha(rawStroke) > 0;
+      const pa = (v) => Math.min(1, paintAlpha(v));
+      const fc = hasFill ? dataPaint(ctx, surf, opAcc * pa(rawFill)) : null;
+      fill = fc || 'none';
+      if (ctx.mode === 'ink') {
+        stroke = surf?.ink ? '#000000' : 'none';
+        if (surf?.ink) sw = surf.sw ?? (hasStroke ? sw : 2);
+      } else if (hasStroke && (hasFill || surf?.base || ctx.mode === 'cover')) {
+        stroke = (hasFill ? fc : dataPaint(ctx, surf, opAcc * pa(rawStroke))) || 'none';
+      } else stroke = 'none';
+    } else {
+      fill = H ? (rawFill && rawFill !== 'none' ? hv : 'none') : dith ? 'none' : paintAttr(rawFill, nkey, 'fg', ctx);
+      stroke = H ? (rawStroke && rawStroke !== 'none' ? hv : 'none') : paintAttr(rawStroke, nkey, 'sg', ctx);
+    }
+    // полупрозрачный лист с одной краской: fill-opacity / stroke-opacity вместо opacity группы
+    const single = !H && !D && opacity < 1 && !kids.length && !dith && !g.attrs.filter && !g.attrs.style && (fill === 'none') !== (stroke === 'none');
+    if (single) g.attrs.opacity = null;
     if (node.type === 'text') {
       const txt = String(Pt('text') ?? '');
       const reveal = clamp(Pt('textReveal'));
@@ -1433,14 +1574,21 @@ function evalNode(node, t, ctx, key, copy, extraScale = 1) {
           x: 0, y: 0, 'text-anchor': anchor, 'dominant-baseline': 'central',
           'font-size': fmt(Pt('fontSize')), 'font-family': Pt('fontFamily'), 'font-weight': Pt('fontWeight'),
           'letter-spacing': fmt(Pt('letterSpacing')), fill, stroke, 'stroke-width': stroke !== 'none' ? fmt(sw) : null,
+          'fill-opacity': single && fill !== 'none' ? fmt(clamp(opacity)) : null, 'stroke-opacity': single && stroke !== 'none' ? fmt(clamp(opacity)) : null,
           filter: H ? heightFilter(ctx, rel, false) : null,
         },
         text: shown,
       });
     } else {
       const geom = nodeGeom(node, T, ctx, copy);
+      // вырожденные фигуры (< 0.3 px по ширине или высоте) не рисуются: resvg на них падает
+      const [bw, bh] = geomBox(geom), kpx = scaleHere;
+      const thin = fill !== 'none' && stroke === 'none' ? bw * kpx < 0.3 || bh * kpx < 0.3 : D && bw * kpx < 0.3 && bh * kpx < 0.3;
+      if (thin) { fill = 'none'; stroke = 'none'; }
       const d = geomToPath(geom);
       const attrs = { d, fill, stroke, 'fill-rule': p.fillRule || null };
+      if (single && fill !== 'none') attrs['fill-opacity'] = fmt(clamp(opacity));
+      if (single && stroke !== 'none') attrs['stroke-opacity'] = fmt(clamp(opacity));
       if (stroke !== 'none') {
         attrs['stroke-width'] = fmt(sw);
         attrs['stroke-linecap'] = Pt('lineCap');
@@ -1459,24 +1607,27 @@ function evalNode(node, t, ctx, key, copy, extraScale = 1) {
       }
       if (p.strokeFirst) attrs['paint-order'] = 'stroke';
       if (H && (fill !== 'none' || attrs.stroke !== 'none')) attrs.filter = heightFilter(ctx, rel, false);
-      if (dith) {
+      if (thin) { /* ничего */ }
+      else if (dith) {
         const filled = ditherElements(geom, d, dith, Pt('fill'), p.fillRule, ctx, nkey);
         if (filled) g.children.push(filled);
         if (attrs.stroke !== 'none') g.children.push({ tag: 'path', attrs });
-      } else g.children.push({ tag: 'path', attrs });
+      } else if (!D || attrs.fill !== 'none' || attrs.stroke !== 'none') g.children.push({ tag: 'path', attrs });
     }
   }
 
-  // дети (рельеф группы наследуется)
-  const kids = ctx.c.children.get(node.id) || [];
-  const prevRel = ctx.reliefCur;
+  // дети (рельеф, поверхность и прозрачность в проходах наследуются)
+  const prevRel = ctx.reliefCur, prevSurf = ctx.surfCur, prevOp = ctx.opCur, prevScale = ctx.scaleCur;
   if (rel) ctx.reliefCur = rel;
+  if (D) { ctx.surfCur = surf; ctx.opCur = opAcc; }
+  ctx.scaleCur = scaleHere;
   for (const ch of kids) {
     if (ctx.c.clipRefs.has(ch.id)) continue;
     const e = evalWithClip(ch, T, ctx, key, copy);
     if (e) g.children.push(e);
   }
-  ctx.reliefCur = prevRel;
+  ctx.reliefCur = prevRel; ctx.surfCur = prevSurf; ctx.opCur = prevOp; ctx.scaleCur = prevScale;
+  if (D && !g.children.length) return null;
   return g;
 }
 
@@ -1565,13 +1716,16 @@ export function evaluate(scene, t, opts = {}) {
     if (e) body.push(e);
   }
   const showBg = opts.background ?? !opts.only;
-  const bgFill = ctx.mode === 'height' ? grayHex(ctx.relief.background) : scene.background && scene.background !== 'none' ? paintAttr(scene.background, 'bg', 'bg', ctx) : null;
+  const bgFill = ctx.mode === 'height' ? grayHex(ctx.relief.background)
+    : ctx.data ? PASS_BG[ctx.mode] ?? (ctx.maskTag ? '#000000' : null)
+    : scene.background && scene.background !== 'none' ? paintAttr(scene.background, 'bg', 'bg', ctx) : null;
   const bg = showBg && bgFill ? [{ tag: 'rect', attrs: { x: 0, y: 0, width: scene.width, height: scene.height, fill: bgFill } }] : [];
   // viewBox: [x, y, w, h] — кадрирование (например, для вырезки слоя)
   const vb = opts.viewBox || [0, 0, scene.width, scene.height];
   const ow = opts.width ?? vb[2];
   // пиксельный режим: без сглаживания краёв (растр потом увеличивается без фильтрации)
-  const crisp = opts.crisp ?? false;
+  // проходы с данными (нормали, плоскости) — без сглаживания: смешанный край дал бы мусорную нормаль
+  const crisp = opts.crisp ?? (ctx.mode === 'normal' || ctx.mode === 'plane' || ctx.mode === 'planeD');
   return {
     tag: 'svg',
     attrs: { xmlns: 'http://www.w3.org/2000/svg', 'xmlns:xlink': 'http://www.w3.org/1999/xlink', viewBox: vb.map(fmt).join(' '), width: ow, height: opts.height ?? Math.round((ow * vb[3]) / vb[2]),
@@ -1689,9 +1843,21 @@ export function collectLights(scene, t = 0, opts = {}) {
     let hidden = false;
     for (let p = n.parent; p && !hidden; p = ctx.c.byId.get(p)?.parent) { const pn = ctx.c.byId.get(p); if (pn && propValue(pn, 'visible', t, ctx) === false) hidden = true; }
     if (hidden) continue;
-    const [x, y] = mat.apply(m, P('anchorX'), P('anchorY'));
+    let [x, y] = mat.apply(m, P('anchorX'), P('anchorY'));
     const k = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
-    out.push({ id: n.id, x, y, z: P('z'), color: P('color'), energy: P('energy') * clamp(P('opacity')), radius: P('radius') * k, falloff: P('falloff') ?? 1 });
+    const l = { id: n.id, x, y, z: P('z'), color: P('color'), energy: P('energy') * clamp(P('opacity')), radius: P('radius') * k, falloff: P('falloff') ?? 1 };
+    const p3 = P('p3'), c3 = scene.camera3d;
+    if (Array.isArray(p3) && p3.length >= 3) {
+      // 3D-источник: radius — в единицах мира; для 2D-превью и экспорта — проекция камерой
+      l.p3 = p3.slice(0, 3); l.radius3 = P('radius'); l.group = P('group') || 'lamp';
+      const sh = P('shadows'); if (sh != null) l.shadows = !!sh;
+      if (c3) {
+        const f = c3.f ?? 1500, dz = c3.dz ?? 0, zz = Math.max(0.05, p3[2] + dz);
+        l.x = (c3.cx ?? scene.width / 2) + (f * p3[0]) / zz; l.y = (c3.hor ?? 280) + (f * ((c3.camH ?? 4.2) - p3[1])) / zz;
+        l.radius = l.radius3 * (f / zz); l.z = Math.max(20, l.radius * 0.25);
+      }
+    }
+    out.push(l);
   }
   return out;
 }

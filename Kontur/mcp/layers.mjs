@@ -59,7 +59,8 @@ export function safeNames(names, fallback = 'n') {
  * bakeLayers(scene, dir, opts) — слои сцены в PNG в папке dir/<layersDir>.
  * opts: fps (12), scale (1; в пиксельном режиме по умолчанию 1/размер пикселя), normals (false | true | {…, animated}),
  *       clips (имена; по умолчанию все или «default» = вся шкала), lights (false — без источников света),
- *       layersDir ('layers'), tag ('godot' — префикс строк лога), log
+ *       layersDir ('layers'), tag ('godot' — префикс строк лога), log,
+ *       lit: 'deferred' — статичные слои запекаются с отложенным светом и стилем (источники тогда не выводятся, если не lights: true)
  * Возвращает { W, H, px, scale, clips, fpsOf, nodes, lights, frameCount, normals }:
  *   nodes — слои снизу вверх: { type: 'static'|'anim', name, x, y (левый верхний угол, px сцены), file | anims[{name,fps,loop,next,frames[{file,duration,normal}]}],
  *           normal, blend, items (id узлов), state ({group,value,visible}|null), width, height (размер PNG) }
@@ -159,6 +160,23 @@ export async function bakeLayers(scene, dir, opts = {}) {
 
   // 3. рендер слоёв (кадры считаются параллельно)
   const crisp = !!px && !px.aa;
+  // запечённый отложенный свет: статичные слои берут цвет из итогового кадра стиля (альфа — своя)
+  let litFrame = null;
+  if (opts.lit === 'deferred' && scene.camera3d) {
+    const { renderLit } = await import('./lighting.mjs');
+    litFrame = (await renderLit(scene, clips[0].start, { width: Math.round(W * scale) })).image;
+    log(`${tag}: отложенный свет запечён (${litFrame.width}×${litFrame.height})`);
+  }
+  const bakeLit = (png, x0, y0) => {
+    const img = decodePNG(png), lw = litFrame.width, lh = litFrame.height, kx = lw / W;
+    for (let y = 0; y < img.height; y++) for (let x = 0; x < img.width; x++) {
+      const o = (y * img.width + x) * 4;
+      if (!img.data[o + 3]) continue;
+      const sx = Math.min(lw - 1, Math.round(x0 * kx) + x), sy = Math.min(lh - 1, Math.round(y0 * kx) + y), s = (sy * lw + sx) * 4;
+      img.data[o] = litFrame.data[s]; img.data[o + 1] = litFrame.data[s + 1]; img.data[o + 2] = litFrame.data[s + 2];
+    }
+    return encodePNG(img);
+  };
   const renderLayer = async (L, t, v) => {
     const [x0, y0, x1, y1] = L.bbox, bw = x1 - x0, bh = y1 - y0;
     const ids = L.items.flatMap((i) => i.ids);
@@ -167,6 +185,7 @@ export async function bakeLayers(scene, dir, opts = {}) {
     const svg = renderSVG(scene, t, { only: ids.length ? ids : ['__none__'], viewBox: [x0, y0, bw, bh], width: ow, background: bg, states: statesFor(v), crisp });
     let png = await svgToPng(svg, ow);
     if (px?.palette) { const img = decodePNG(png); quantizeRGBA(img.data, px.palette); png = encodePNG(img); }
+    if (litFrame && !L.anim && !L.blend) png = bakeLit(png, x0, y0);
     return { png, ids, ow };
   };
   const normalOf = async (L, t, ids, ow, v) => {
@@ -225,7 +244,7 @@ export async function bakeLayers(scene, dir, opts = {}) {
   // 3а. источники света (позиции и параметры — в начале первого клипа);
   // свет, который меняется от состояний, выводится по варианту на каждый (с меткой состояния)
   const lights = [];
-  if (opts.lights !== false) {
+  if (opts.lights !== false && !(litFrame && opts.lights !== true)) {
     const lightGroup = new Map();
     for (const g of scene.states || []) for (const patch of Object.values(g.values || {})) for (const id of Object.keys(patch || {})) if (byId.get(id)?.type === 'light' && !lightGroup.has(id)) lightGroup.set(id, g);
     for (const l of collectLights(scene, clips[0].start)) if (!lightGroup.has(l.id)) lights.push(l);

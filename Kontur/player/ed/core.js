@@ -9,7 +9,7 @@ export const E = {
   live: false, source: null, rev: -1, path: null, edits: null, saving: false,
   zoom: 1, panX: 0, panY: 0, player: null,
   keySel: new Set(), anchorSel: new Set(), focus: 'canvas',
-  fill: '#9ea8ff', stroke: '#e4e6f0', showBones: true, snap: true, pixelPreview: false, lightPreview: false,
+  fill: '#9ea8ff', stroke: '#e4e6f0', showBones: true, snap: true, pixelPreview: false, lightPreview: false, deferredPreview: false,
   collapsed: new Set(), guides: [], marquee: null, pen: null, pencil: null, clipboard: null,
 };
 

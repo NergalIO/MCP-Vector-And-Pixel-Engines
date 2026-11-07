@@ -220,7 +220,8 @@ export function upscaleNearest(img, w, h) {
 /**
  * Кадр сцены в PNG с учётом пиксельного режима (scene.pixel), состояний и света.
  * opts: width, viewBox, only, background, states, pixel (false — выключить), native (пиксельный кадр без увеличения),
- *       lit (true или { ambient, normals }) — освещение источниками light по карте нормалей.
+ *       lit (true или { ambient, normals }) — освещение источниками light по карте нормалей;
+ *       lit: 'deferred' (или { mode: 'deferred', lighting, style }) — отложенный свет 2.5D-сцены (mcp/lighting.mjs).
  */
 export async function renderPNG(scene, t = 0, opts = {}) {
   const vb = opts.viewBox || [0, 0, scene.width, scene.height];
@@ -230,6 +231,14 @@ export async function renderPNG(scene, t = 0, opts = {}) {
   const lowW = px ? Math.max(1, Math.round(vb[2] / px.size)) : outW;
   const ro = { ...base, width: lowW, crisp: !!px && !px.aa };
   let png;
+  const deferred = opts.lit === 'deferred' || (typeof opts.lit === 'object' && opts.lit?.mode === 'deferred');
+  if (deferred) {
+    // отложенный свет (2.5D: camera3d + surface): свой пиксельный стиль задаётся style, scene.pixel не применяется
+    const { renderLit } = await import('./lighting.mjs');
+    const L = typeof opts.lit === 'object' ? opts.lit : {};
+    const r = await renderLit(scene, t, { width: outW, states: opts.states, lighting: L.lighting, style: L.style });
+    return r.png;
+  }
   if (opts.lit) {
     const { sceneNormalMap, lightImage } = await import('./normals.mjs');
     const L = typeof opts.lit === 'object' ? opts.lit : {};

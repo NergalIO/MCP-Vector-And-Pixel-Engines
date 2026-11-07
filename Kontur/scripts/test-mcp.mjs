@@ -178,6 +178,59 @@ try {
   check(readFileSync(join(uDir, 'Room.prefab'), 'utf8') === pf, 'Unity: повторный экспорт даёт те же GUID и fileID (ссылки в сценах не рвутся)');
   await call('node_remove', { id: 'uLight' });
 
+  // ---------- 2.5D: камера, мир, свет, проходы ----------
+  await call('scene_new', { width: 640, height: 360, duration: 1, background: '#0d0f1a' });
+  const cam = await call('camera3d_set', { hor: 120, charPx: 120, f: 520, dz: 2 });
+  check(/camH/.test(cam.content[0].text) && /Рост персонажа/.test(cam.content[0].text), 'camera3d_set: камера по росту персонажа');
+  const wb = await call('world_build', { seed: 3, sky: ['#203060', '#506090', '#c0a080'], items: [
+    { type: 'ground', x: [-8, 8], z: [0, 30] },
+    { type: 'house', x: [-6, -1], z: [6, 11], h: 6, mat: 'plaster', facades: ['front', 'right'], litP: 1 },
+    { type: 'box', x: [1, 3], y: [0, 1.2], z: [4, 5], color: 'wood', mats: { front: ['wood', 'wood'] } },
+    { type: 'lamp', X: 2, Z: 3 },
+    { type: 'disc', X: -0.5, Z: 2.5, rx: 0.8, color: '#304050', spec: 1 },
+    { type: 'nope' },
+  ] });
+  check(/Группа world/.test(wb.content[0].text) && /#5 \(nope\)/.test(wb.content[0].text), 'world_build: мир собран, ошибки объектов — в отчёте');
+  const wj = JSON.parse((await call('scene_get_json')).content[0].text);
+  const wroot = wj.nodes.find((n) => n.id === 'world');
+  check(wroot?.props.world3d.items.length === 6 && wj.nodes.some((n) => n.props?.occluder) && wj.nodes.some((n) => n.type === 'light' && n.props.p3), 'world_build: описание, окклюдеры и источники p3 в сцене');
+  check(typeof wj.background === 'object' && wj.camera3d.f === 520, 'world_build: небо стало фоном, камера сохранена');
+  const n0 = wj.nodes.length;
+  await call('camera3d_set', { f: 600 });
+  const wj2 = JSON.parse((await call('scene_get_json')).content[0].text);
+  check(wj2.camera3d.f === 600 && wj2.nodes.find((n) => n.id === 'world') && Math.abs(wj2.nodes.length - n0) < n0 * 0.5 && JSON.stringify(wj2.nodes) !== JSON.stringify(wj.nodes), 'camera3d_set: мир пересобран под новую камеру');
+  // материал на свою грань
+  await call('node_add', { id: 'myWall', type: 'path', props: { d: 'M 420 90 L 600 70 L 600 260 L 420 250 Z', fill: '#a07050', surface: { normal: [0, 0, -1], plane: [0, 0, -1, -9] } } });
+  const ma = await call('material_apply', { id: 'myWall', material: 'brick', color: '#a05040' });
+  check(/myWall_mat/.test(ma.content[0].text), 'material_apply: кладка на грани');
+  const wj3 = JSON.parse((await call('scene_get_json')).content[0].text);
+  const iw = wj3.nodes.findIndex((n) => n.id === 'myWall');
+  check(wj3.nodes[iw + 1].id === 'myWall_matclip' && wj3.nodes.find((n) => n.id === 'myWall_mat_clip').props.clip === 'myWall_matclip' && wj3.nodes.filter((n) => n.id.startsWith('myWall_m') && n.type === 'path').length > 10,'material_apply: детали после грани, обрезаны её контуром');
+  await call('material_apply', { id: 'myWall', material: 'stone' });
+  const wj4 = JSON.parse((await call('scene_get_json')).content[0].text);
+  check(wj4.nodes.filter((n) => n.id === 'myWall_mat').length === 1 && /stone/.test(wj4.nodes.find((n) => n.id === 'myWall_mat').props.name), 'material_apply: повтор заменяет материал');
+  const ss = await call('surface_set', { ids: ['myWall'], surface: { spec: 0.4, emissive: '#ff8000' } });
+  check(/"spec":0.4/.test(ss.content[0].text) && /"plane"/.test(ss.content[0].text), 'surface_set: слияние полей');
+  await call('surface_set', { ids: ['myWall'], unset: ['emissive'] });
+  check(!JSON.parse((await call('scene_get_json', { id: 'myWall' })).content[0].text).props.surface.emissive, 'surface_set: unset убирает поле');
+  const ls = await call('lighting_set', { preset: 'night', exposure: 0.9, sun: { energy: 0.4 } });
+  check(/экспозиция 0.9/.test(ls.content[0].text) && /ink → vignette/.test(ls.content[0].text), 'lighting_set: пресет + поля, стиль пресета');
+  await call('style_set', { chain: [{ type: 'cel' }, { type: 'vignette', strength: 0.3 }] });
+  const badStyle = await rpc('tools/call', { name: 'style_set', arguments: { chain: [{ type: 'oil' }] } });
+  check(badStyle.result.isError, 'style_set: неизвестный эффект — ошибка');
+  const lf = await call('render_frame', { t: 0, width: 640, lit: 'deferred', debug: true, out: join(outDir, 'lit.png') });
+  check(/## 2.5D/.test((await call('docs', { topic: '2.5d' })).content[0].text), 'docs: раздел 2.5D');
+  check(lf.content[0].type === 'image' && /отложенный свет: пресет night/.test(lf.content[1].text) && existsSync(join(outDir, 'lit.png')), 'render_frame lit: "deferred" + debug');
+  writeFileSync(join(outDir, 'lit-debug.png'), Buffer.from(lf.content[0].data, 'base64'));
+  const pDir = join(outDir, 'passes');
+  await call('render_passes', { dir: pDir, width: 320, lit: true });
+  check(['color', 'normal', 'plane', 'planeD', 'emissive', 'ink', 'cover', 'mask_chr', 'normal_map', 'lit', 'shadow_ao'].every((k) => existsSync(join(pDir, `${k}.png`))), 'render_passes: все проходы и карта нормалей');
+  const litPng = await fetch('http://127.0.0.1:7799/lit.png?w=320');
+  check(litPng.status === 200 && (await litPng.arrayBuffer()).byteLength > 1000, 'студия: /lit.png отдаёт кадр с отложенным светом');
+  const ex = join(outDir, 'baked.png');
+  await call('export', { format: 'png', path: ex, lit: 'deferred', width: 320 });
+  check(existsSync(ex), 'export png с отложенным светом');
+
   await call('scene_open', { path: 'examples/bay.json' });
   const bayTex = JSON.parse((await call('scene_get_json', { id: 'paint' })).content[0].text).props.src;
   check(bayTex.endsWith('paint-texture.jpg'), `пример с ассетами открыт (${bayTex})`);
