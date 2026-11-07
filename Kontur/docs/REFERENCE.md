@@ -27,6 +27,7 @@
 | `blob` | `radius`, `points`, `amount`, `frequency`, `speed`, `seed`, `tension`, `stretchX/Y` | «живая» органическая клякса — анимируется сама |
 | `text` | `text`, `fontSize`, `fontFamily`, `fontWeight`, `textAlign`, `letterSpacing`, `textReveal` (0..1) | |
 | `image` | `src`, `width`, `height`, `fit`, `pixelated`, `sheet`, `frame` | растровый слой, центр в (x, y) |
+| `light` | `z` (80), `color`, `energy` (1), `radius` (500), `falloff` (1) | точечный свет: сам не рисуется, виден в превью «Свет» и уходит в Godot как `PointLight2D`, в Unity — как `Light2D` |
 
 Любой узел может иметь свойство `d` (или ключи `d`) — тогда его форма задаётся им, и её можно **морфить**.
 
@@ -100,7 +101,7 @@
   { "name": "talk", "start": 3.2, "end": 5,   "loop": false, "next": "idle" }
 ]
 ```
-- `loop: false` + `next` — что играть после окончания (в студии и в экспорте для Godot).
+- `loop: false` + `next` — что играть после окончания (в студии и в экспорте для Godot и Unity).
 - `fps` — частота кадров клипа при экспорте в спрайты.
 - Студия: список «Клип» и полосы клипов на линейке; MCP: `clip_set`, `clip_remove`; `render_contact_sheet` и `export` принимают `clip`.
 - В коде: `player.setClip('walk')`, `clipRange(scene, 'walk')`, `clipTime(scene, 'walk', localT)`.
@@ -136,6 +137,100 @@
 - `kontur_manifest.json` — описание слоёв, кадров и клипов для собственного конвертера.
 
 Параметры: `fps` (12), `scale` (масштаб текстур), `clips` (какие экспортировать), `resPath` (по умолчанию `res://<имя папки>`).
+
+## Экспорт в Unity
+
+`format: "unity"`, `path` — папка внутри `Assets` проекта (например `<проект>/Assets/Kontur/room`). Для Unity 6 и 2022+,
+URP с 2D Renderer (по умолчанию) или встроенный конвейер (`pipeline: "builtin"` — без света). Слои запекаются так же, как для Godot:
+
+- `Layers/*.png` + `.meta` — спрайты (одиночные, опора слева сверху, без сжатия; в пиксельном режиме — фильтр Point;
+  карты нормалей — вторичная текстура `_NormalMap` для 2D-света URP);
+- `Animations/<клип>.anim` — по клипу сцены, кадры всех анимированных слоёв синхронно; `<title>.controller` — Animator:
+  состояние на клип (имена как в Kontur), `loop: false` + `next` — переход по окончании;
+- `<title>.prefab` — корень с `SortingGroup`, `Animator` и `KonturPlayer`; слои — `SpriteRenderer` по порядку;
+  варианты состояний — объекты, которые включает `SetState`; свет — `Light2D` (точечные + общий `Ambient`);
+- режимы наложения — материалы `Materials/Kontur_<режим>.mat` с шейдером `Kontur/Sprite Blend`;
+- `Assets/Kontur/Runtime/KonturPlayer.cs` и `KonturBlend.shader` — один раз на проект;
+- `kontur_manifest.json` — описание слоёв, как у Godot.
+
+Из кода: `GetComponent<KonturPlayer>().Play("walk")`, `CurrentClip`, `SetState("locker", "open")`, `GetState("locker")`.
+GUID файлов постоянные: повторный экспорт в ту же папку обновляет картинки, не ломая ссылки в сценах Unity.
+
+Параметры: `fps`, `scale`, `clips`, `normals`, `title` (имя префаба, по умолчанию `KonturScene`) — как у Godot;
+`ppu` (100 — пикселей сцены на единицу Unity), `origin` (`center` — центр сцены в точке префаба, или `top-left`),
+`pipeline` (`urp` | `builtin`), `colorSpace` (`linear` | `gamma`; по умолчанию читается из `ProjectSettings` проекта).
+
+Цвет. Unity в Linear-проекте смешивает цвета в линейных значениях, Kontur (как браузер) — в sRGB. Шейдер наложения
+пересчитывает слой так, что multiply совпадает с Kontur, screen — точнее обычной полупрозрачности Unity, overlay,
+soft-light и hard-light — удвоенным умножением (верно на тёмном фоне), darken, lighten, color-dodge, difference и
+plus-lighter — приблизительно. Свет `Light2D` (интенсивность, спад, цвет, `Ambient`) подбирается численно под превью
+Kontur `lit` с учётом того, как считает URP 17, поэтому цвета света в инспекторе темнее, чем в Kontur.
+Имена на кириллице в файлах пишутся латиницей (`ходьба` → `hodba`), в Animator остаются как есть.
+
+## Кости и IK
+
+Кость — группа с `bone: true`: её `x`, `y` — сустав в координатах родителя, `rotation` — поворот звена,
+`boneLength` — длина (для рисования в редакторе; без неё длина берётся до первой дочерней кости).
+Дети кости (руки, ноги, части тела) просто вложены в неё и поворачиваются вместе с ней.
+
+Двухзвенный IK задаётся на **конечном** узле цепочки (стопа, кисть): `props.ik = { target, bend, flip, orient, orientOffset, enabled }`.
+Его родитель и дед (голень и бедро) поворачиваются так, чтобы опорная точка конечного узла
+совпала с опорной точкой узла `target` (обычно пустая группа-цель).
+- `bend` 1 | −1 — в какую сторону сгибается сустав (по умолчанию — как в текущей позе), `flip` — обратная сторона;
+- `orient: true` — конечный узел повторяет поворот цели (стопа ровно стоит на полу), `orientOffset` — добавка в градусах;
+- `ikWeight` (0..1, можно анимировать) смешивает IK с ключами поворота: 0 — только ключи, 1 — только IK.
+
+Анимируйте цель (ключи `x`, `y` у `target`), а не углы звеньев. MCP: `bone_mark`, `ik_set`.
+
+```json
+{ "id": "foot", "type": "group", "parent": "shin", "props": { "x": 120, "y": 0, "ik": { "target": "foot_target", "orient": true } } }
+```
+
+## Состояния объектов
+
+Именованные варианты, которые подменяют свойства узлов поверх ключей: дверь открыта/закрыта, лампа вкл/выкл.
+
+```json
+"states": [
+  { "name": "locker", "default": "closed",
+    "values": { "closed": {}, "open": { "door": { "visible": false }, "door_open": { "visible": true } } } }
+]
+```
+
+Порядок значения свойства: вариант состояния → ключи → `props`. Выбор варианта не хранится в сцене:
+его передают при рендере (`render_frame` / `render_contact_sheet` с `states: {"locker": "open"}`, `new Player(el, scene, { states })`,
+`player.setState('locker', 'open')`), без выбора берётся `default`. В Godot экспорт делает слой на вариант
+и `$Scene.set_state(&"locker", &"open")`, в Unity — `GetComponent<KonturPlayer>().SetState("locker", "open")`. MCP: `state_set`, `state_remove`.
+
+## Свет и пиксельный режим
+
+- **Свет.** Узлы `light` + `scene.ambient` (общий фон освещения, по умолчанию `#4a4f5c`). Превью считает свет по карте
+  рельефа (как 2D-свет Godot с картой нормалей): `render_frame` с `lit: true`, кнопка «Свет» в редакторе.
+  Затухание: `(1 − d/radius)^falloff`, `z` — высота источника над сценой. В Godot — `PointLight2D`, в Unity — `Light2D` (URP).
+- **Пиксельный режим** `scene.pixel = { enabled, size, palette, aa }`: кадр рисуется в разрешении
+  (ширина/size × высота/size) без сглаживания и увеличивается «ближайшим соседом» — вектор выглядит как пиксель-арт.
+  `palette` — список цветов, к которым приводится кадр; `aa: true` оставляет сглаживание краёв.
+  MCP: `pixel_set`, `render_frame` с `pixel: true`.
+
+## Правки из редактора (`*.edits.json`)
+
+Если сцена собирается скриптом (`X.build.mjs` пишет `X.kontur.json`), ручные правки в редакторе
+не пишутся в `X.kontur.json`, а копятся рядом в `X.edits.json` — разницей со сценой из скрипта:
+
+```json
+{ "kontur": "edits", "version": 1,
+  "scene": { "ambient": "#30364a" },
+  "nodes": { "table": { "props": { "x": 812 }, "base": { "type": "group", "parent": null }, "was": { "x": 760 } } },
+  "removed": ["dust_3"],
+  "order": [ { "id": "path", "parent": null, "after": "sock", "add": { "id": "path", "type": "path", "props": { "d": "M0 0 L40 0" } } } ] }
+```
+`nodes` — изменённые свойства (`was` — значения из скрипта на момент правки, по ним видно, что скрипт их потом поменял),
+`removed` — удалённые узлы, `order` — добавленные (`add`) и переставленные узлы.
+
+Скрипт можно перезапускать: сервер замечает новый `X.kontur.json` и накладывает правки заново.
+Если объект из правок исчез (скрипт переименовал id), правка не теряется — она остаётся в файле, а `edits_info`
+и вкладка «Сцена» показывают предупреждение. Свои скрипты запекания читают сцену через `applyEdits(base, edits)`
+(в проекте игры — `loadScene()` из `art_src/kontur/lib.mjs`). MCP: `scene_open` с `edits: true|false`, `edits_info`, `edits_reset`.
 
 ## Ключевые кадры
 

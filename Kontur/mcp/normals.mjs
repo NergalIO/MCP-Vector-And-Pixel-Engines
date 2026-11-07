@@ -181,6 +181,44 @@ export function normalsFromHeight(H, alpha, w, h, { strength = 3, blur = 1, yUp 
   return { width: w, height: h, data: out };
 }
 
+/**
+ * Освещение как в Godot 2D: цвет × (ambient + Σ цвет_света·energy·затухание·max(0, N·L)).
+ * lights: [{x, y, z, color, energy, radius, falloff}] в пикселях картинки; ambient — [r, g, b] 0..1 (CanvasModulate).
+ * Затухание — линейный радиальный градиент текстуры PointLight2D: (1 − d/radius)^falloff.
+ */
+export function lightImage(color, normal, lights, { ambient = [0.29, 0.31, 0.36], yUp = true } = {}) {
+  const { width: w, height: h } = color, out = new Uint8Array(w * h * 4);
+  const L = lights.map((l) => {
+    const c = parseCssColor(l.color);
+    return { x: l.x, y: l.y, z: l.z ?? 80, r: Math.max(1, l.radius ?? 500), f: l.falloff ?? 1, cr: c[0] * (l.energy ?? 1), cg: c[1] * (l.energy ?? 1), cb: c[2] * (l.energy ?? 1) };
+  });
+  for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) {
+    const o = (py * w + px) * 4;
+    let nx = 0, ny = 0, nz = 1;
+    if (normal) { nx = normal.data[o] / 127.5 - 1; const ns = normal.data[o + 1] / 127.5 - 1; ny = yUp ? -ns : ns; nz = normal.data[o + 2] / 127.5 - 1; }
+    let ar = ambient[0], ag = ambient[1], ab = ambient[2];
+    for (const l of L) {
+      const dx = l.x - px, dy = l.y - py, d2 = Math.hypot(dx, dy);
+      if (d2 >= l.r) continue;
+      const att = Math.pow(1 - d2 / l.r, l.f);
+      const len = Math.hypot(dx, dy, l.z) || 1;
+      const nl = Math.max(0, (nx * dx + ny * dy + nz * l.z) / len) * att;
+      ar += l.cr * nl; ag += l.cg * nl; ab += l.cb * nl;
+    }
+    out[o] = Math.min(255, color.data[o] * ar); out[o + 1] = Math.min(255, color.data[o + 1] * ag); out[o + 2] = Math.min(255, color.data[o + 2] * ab);
+    out[o + 3] = color.data[o + 3];
+  }
+  return { width: w, height: h, data: out };
+}
+function parseCssColor(c) {
+  if (Array.isArray(c)) return c;
+  // сначала 6 знаков: иначе #80b0ff читался как #80b
+  const m = /^#?([0-9a-f]{6}|[0-9a-f]{3})(?![0-9a-f])/i.exec(String(c || '#fff').trim());
+  if (!m) return [1, 1, 1];
+  const hx = m[1].length === 3 ? m[1].replace(/./g, '$&$&') : m[1];
+  return [0, 2, 4].map((i) => parseInt(hx.slice(i, i + 2), 16) / 255);
+}
+
 /** Превью освещения: цвет × (ambient + diffuse·N·L) от точечного источника. */
 export function litPreview(color, normal, { x = 0.25, y = 0.2, z = 0.35, ambient = 0.35, intensity = 1.1, lightColor = [1, 0.97, 0.92], yUp = true } = {}) {
   const { width: w, height: h } = color, out = new Uint8Array(w * h * 4);
@@ -236,12 +274,11 @@ export const NORMAL_DEFAULTS = {
  * Рельеф: каждая фигура — «подушка» с фаской (bevel/profile/depth), узлы могут переопределять props.relief.
  * opts: { t, only, viewBox, width, settings }
  */
-export async function sceneNormalMap(scene, { t = 0, only, viewBox, width, settings = {} } = {}) {
+export async function sceneNormalMap(scene, { t = 0, only, viewBox, width, settings = {}, states, crisp } = {}) {
   const st = { ...NORMAL_DEFAULTS, ...(scene.relief || {}), ...settings };
   const relief = { height: st.height, depth: st.depth, bevel: st.bevel, profile: st.profile, luma: st.luma, background: st.background ?? 0 };
-  const opt = { only, viewBox, width, background: only ? false : undefined };
-  const hPng = await svgToPng(renderSVG(scene, t, { ...opt, mode: 'height', relief }), width);
-  const cPng = await svgToPng(renderSVG(scene, t, opt), width);
+  const opt = { only, viewBox, width, background: only ? false : undefined, states, crisp };
+  const [hPng, cPng] = await Promise.all([svgToPng(renderSVG(scene, t, { ...opt, mode: 'height', relief }), width), svgToPng(renderSVG(scene, t, opt), width)]);
   const hi = decodePNG(hPng), ci = decodePNG(cPng);
   const n = hi.width * hi.height, H = new Float32Array(n), A = new Float32Array(n);
   for (let i = 0; i < n; i++) { H[i] = hi.data[i * 4] / 255; A[i] = Math.max(hi.data[i * 4 + 3], ci.data[i * 4 + 3]) / 255; }

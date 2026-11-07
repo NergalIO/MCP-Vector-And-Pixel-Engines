@@ -4,7 +4,7 @@
  * Один ES-модуль без зависимостей: работает в браузере и в Node.js.
  */
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 /* =========================================================================
  * 1. Математика и шум
@@ -771,7 +771,7 @@ export function sampleKeys(keys, t, prop) {
  * 6. Модель сцены
  * ========================================================================= */
 
-export const NODE_TYPES = ['group', 'rect', 'ellipse', 'circle', 'polygon', 'star', 'path', 'line', 'blob', 'text', 'image'];
+export const NODE_TYPES = ['group', 'rect', 'ellipse', 'circle', 'polygon', 'star', 'path', 'line', 'blob', 'text', 'image', 'light'];
 
 const DEFAULTS = {
   x: 0, y: 0, rotation: 0, scale: 1, scaleX: 1, scaleY: 1, skewX: 0, anchorX: 0, anchorY: 0, opacity: 1,
@@ -784,6 +784,8 @@ const DEFAULTS = {
 const TYPE_DEFAULTS = {
   polygon: { radius: 50 },
   blob: { radius: 80, points: 8, amount: 0.25, frequency: 1.2, speed: 0.5, seed: 1, tension: 1 },
+  // точечный свет (для превью освещения и PointLight2D в Godot): z — высота над сценой в px
+  light: { z: 80, color: '#ffffff', energy: 1, radius: 500 },
 };
 function defaultFor(type, prop) {
   if (prop === 'fill') return type === 'path' || type === 'line' || type === 'group' ? 'none' : '#ffffff';
@@ -791,6 +793,9 @@ function defaultFor(type, prop) {
   if (TYPE_DEFAULTS[type] && prop in TYPE_DEFAULTS[type]) return TYPE_DEFAULTS[type][prop];
   return DEFAULTS[prop];
 }
+
+/** Значение свойства по умолчанию для типа узла (для редактора и инструментов). */
+export const propDefault = (type, prop) => defaultFor(type, prop);
 
 export function createScene(o = {}) {
   return {
@@ -806,8 +811,14 @@ export function createScene(o = {}) {
 const sceneCaches = new WeakMap();
 function cacheFor(scene) {
   let c = sceneCaches.get(scene);
-  if (!c) { c = { children: null, byId: null, clipRefs: null, springs: new Map(), measures: new Map() }; sceneCaches.set(scene, c); }
+  if (!c) { c = { children: null, byId: null, clipRefs: null, springs: new Map(), measures: new Map(), evalCache: new Map(), stat: new Map() }; sceneCaches.set(scene, c); }
   return c;
+}
+/** Короткий стабильный хеш строки (FNV-1a) — для id в defs. */
+export function hashStr(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36);
 }
 /** Сбросить кэши после изменения сцены. */
 export function invalidate(scene) { sceneCaches.delete(scene); }
@@ -815,6 +826,7 @@ function index(scene) {
   const c = cacheFor(scene);
   if (!c.byId) {
     c.byId = new Map(); c.children = new Map(); c.clipRefs = new Set();
+    c.ik = []; c.ikAffected = new Set(); c.stateAffected = new Set();
     for (const n of scene.nodes) {
       c.byId.set(n.id, n);
       const p = n.parent ?? null;
@@ -823,6 +835,18 @@ function index(scene) {
       for (const k of ['clip', 'mask']) if (n.props?.[k]) c.clipRefs.add(n.props[k]);
       if (n.keys) for (const k in n.keys) if (n.keys[k].some((a, i, arr) => i && arr[i - 1].t > a.t)) n.keys[k].sort((a, b) => a.t - b.t);
     }
+    // IK-цепочки: props.ik на конечном узле; поворачиваются его родитель и дед
+    const depth = (id) => { let d = 0, p = c.byId.get(id)?.parent; while (p && d < 999) { d++; p = c.byId.get(p)?.parent; } return d; };
+    for (const n of scene.nodes) {
+      const ik = n.props?.ik;
+      if (!ik || typeof ik !== 'object' || !ik.target || ik.enabled === false) continue;
+      const B = c.byId.get(n.parent), A = B && c.byId.get(B.parent);
+      if (!A || !c.byId.has(ik.target)) continue;
+      c.ik.push({ end: n.id, mid: B.id, root: A.id, cfg: ik, depth: depth(A.id) });
+      c.ikAffected.add(A.id); c.ikAffected.add(B.id); if (ik.orient) c.ikAffected.add(n.id);
+    }
+    c.ik.sort((a, b) => a.depth - b.depth);
+    for (const g of scene.states || []) for (const v of Object.values(g.values || {})) for (const id of Object.keys(v || {})) c.stateAffected.add(id);
   }
   return c;
 }
@@ -887,10 +911,10 @@ function paintAlpha(v) {
   return 1;
 }
 const grayHex = (v) => { const c = Math.round(clamp(v) * 255).toString(16).padStart(2, '0'); return `#${c}${c}${c}`; };
-function heightFilter(ctx, rel, isImage) {
-  const key = `h|${rel.height}|${rel.depth}|${rel.bevel}|${rel.profile}|${rel.invert ? 1 : 0}|${isImage ? rel.luma : 0}`;
-  if (ctx.patterns.has(key)) return ctx.patterns.get(key);
-  const id = `${ctx.prefix}-hf${ctx.patterns.size}`;
+function heightFilter(ctx, rel, isImage, region = null) {
+  const key = `h|${rel.height}|${rel.depth}|${rel.bevel}|${rel.profile}|${rel.invert ? 1 : 0}|${isImage ? rel.luma : 0}|${region ? region.join(',') : ''}`;
+  if (ctx.patterns.has(key)) return ctx.reuse(key);
+  const id = `${ctx.prefix}-hf${hashStr(key)}`;
   const base = rel.height, d = (rel.invert ? -1 : 1) * rel.depth;
   const prims = [];
   const exp = { round: 0.5, linear: 1, sharp: 2 }[rel.profile];
@@ -911,10 +935,10 @@ function heightFilter(ctx, rel, isImage) {
     last = 'h2';
   }
   prims.push({ tag: 'feComposite', attrs: { in: last, in2: 'SourceAlpha', operator: 'in' } });
-  ctx.defs.push({ tag: 'filter', attrs: { id, x: '-20%', y: '-20%', width: '140%', height: '140%', 'color-interpolation-filters': 'sRGB' }, children: prims });
-  const url = `url(#${id})`;
-  ctx.patterns.set(key, url);
-  return url;
+  // область фильтра: доли рамки или явный прямоугольник (у кадра спрайт-листа рамка неоднозначна)
+  const area = region ? { filterUnits: 'userSpaceOnUse', x: fmt(region[0]), y: fmt(region[1]), width: fmt(region[2]), height: fmt(region[3]) } : { x: '-20%', y: '-20%', width: '140%', height: '140%' };
+  const def = { tag: 'filter', attrs: { id, ...area, 'color-interpolation-filters': 'sRGB' }, children: prims };
+  return ctx.share(key, def);
 }
 
 class Ctx {
@@ -929,6 +953,20 @@ class Ctx {
     this.mode = opts.mode || 'color';
     this.relief = { ...RELIEF_DEFAULT, ...(scene.relief || {}), ...(opts.relief || {}) };
     this.inClip = 0;
+    this.defIds = new Set();
+    this.recorders = [];
+    this.cache = !!opts.cache;
+    // состояния: выбранный вариант каждой группы → подмена свойств узлов
+    if (scene.states?.length) {
+      this.over = new Map();
+      for (const g of scene.states) {
+        const vals = g.values || {};
+        const v = opts.states?.[g.name] ?? g.default ?? Object.keys(vals)[0];
+        const patch = vals[v];
+        if (!patch) continue;
+        for (const id in patch) this.over.set(id, { ...(this.over.get(id) || {}), ...patch[id] });
+      }
+    }
     if (opts.only) {
       // рендер подмножества: только эти узлы (с потомками); предки дают трансформации, но не рисуются
       const ids = new Set(Array.isArray(opts.only) ? opts.only : [...opts.only]);
@@ -944,13 +982,25 @@ class Ctx {
     }
   }
   id(key, kind) { return `${this.prefix}-${kind}-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}`; }
+  /** Добавить определение в <defs> (без повторов) и отметить его во всех записываемых поддеревьях. */
+  addDef(def) {
+    const id = def.attrs?.id;
+    if (!id || !this.defIds.has(id)) { this.defs.push(def); if (id) this.defIds.add(id); }
+    for (const r of this.recorders) r.push(def);
+  }
+  /** Общий def (паттерн, фильтр) по ключу: создаётся один раз, при повторе регистрируется заново. */
+  share(key, def) { this.patterns.set(key, def); this.addDef(def); return `url(#${def.attrs.id})`; }
+  reuse(key) { const def = this.patterns.get(key); this.addDef(def); return `url(#${def.attrs.id})`; }
 }
 
 /** Значение свойства узла с учётом ключей и модификаторов. */
 function propValue(node, name, t, ctx, copy = 0, upTo = Infinity) {
+  if (name === 'rotation' && ctx.ikRot && ctx.ikRot.has(node.id) && upTo === Infinity) return ctx.ikRot.get(node.id);
   let v;
   const k = node.keys?.[name];
-  if (k && k.length) v = sampleKeys(k, t, name);
+  const ov = ctx.over && ctx.over.get(node.id);
+  if (ov && name in ov) v = ov[name];
+  else if (k && k.length) v = sampleKeys(k, t, name);
   else if (node.props && name in node.props) v = node.props[name];
   else v = defaultFor(node.type, name);
   if (name === 'scale' && v == null) v = 1;
@@ -1116,9 +1166,9 @@ function paintAttr(v, key, kind, ctx) {
         const len = v.length ?? 100, a = v.angle * DEG;
         x1 = -Math.cos(a) * len / 2; y1 = -Math.sin(a) * len / 2; x2 = -x1; y2 = -y1;
       }
-      ctx.defs.push({ tag: 'linearGradient', attrs: { id, gradientUnits: 'userSpaceOnUse', x1: fmt(x1), y1: fmt(y1), x2: fmt(x2), y2: fmt(y2) }, children: stops });
+      ctx.addDef({ tag: 'linearGradient', attrs: { id, gradientUnits: 'userSpaceOnUse', x1: fmt(x1), y1: fmt(y1), x2: fmt(x2), y2: fmt(y2) }, children: stops });
     } else {
-      ctx.defs.push({ tag: 'radialGradient', attrs: { id, gradientUnits: 'userSpaceOnUse', cx: fmt(v.cx ?? 0), cy: fmt(v.cy ?? 0), r: fmt(v.r ?? 50), fx: fmt(v.fx ?? v.cx ?? 0), fy: fmt(v.fy ?? v.cy ?? 0) }, children: stops });
+      ctx.addDef({ tag: 'radialGradient', attrs: { id, gradientUnits: 'userSpaceOnUse', cx: fmt(v.cx ?? 0), cy: fmt(v.cy ?? 0), r: fmt(v.r ?? 50), fx: fmt(v.fx ?? v.cx ?? 0), fy: fmt(v.fy ?? v.cy ?? 0) }, children: stops });
     }
     return `url(#${id})`;
   }
@@ -1204,9 +1254,9 @@ const solidOf = (fill) => (typeof fill === 'string' ? fill : isGrad(fill) ? norm
 /** Паттерн из ячеек матрицы с рангом в [lo, hi). */
 function ditherPattern(ctx, name, hi, color, cell, alpha, lo = 0) {
   const key = `${name}|${lo}|${hi}|${color}|${cell}|${alpha}`;
-  if (ctx.patterns.has(key)) return ctx.patterns.get(key);
+  if (ctx.patterns.has(key)) return ctx.reuse(key);
   const M = DITHER_PATTERNS[name], n = M.length, L = n * n;
-  const id = `${ctx.prefix}-dp${ctx.patterns.size}`;
+  const id = `${ctx.prefix}-dp${hashStr(key)}`;
   const rects = [];
   for (let y = 0; y < n; y++) {
     let x = 0;
@@ -1219,11 +1269,8 @@ function ditherPattern(ctx, name, hi, color, cell, alpha, lo = 0) {
       } else x++;
     }
   }
-  ctx.defs.push({ tag: 'pattern', attrs: { id, patternUnits: 'userSpaceOnUse', width: n * cell, height: n * cell },
+  return ctx.share(key, { tag: 'pattern', attrs: { id, patternUnits: 'userSpaceOnUse', width: n * cell, height: n * cell },
     children: [{ tag: 'g', attrs: { fill: color, 'fill-opacity': alpha < 1 ? fmt(alpha) : null, 'shape-rendering': 'crispEdges' }, children: rects }] });
-  const url = `url(#${id})`;
-  ctx.patterns.set(key, url);
-  return url;
 }
 
 /** Заливка фигуры упорядоченным растром. density — число или [от, до] (вдоль угла angle). */
@@ -1267,7 +1314,7 @@ function ditherElements(geom, d, dith, fillVal, fillRule, ctx, nkey) {
   }
   if (!bands.length) return null;
   const cid = ctx.id(nkey, 'dc');
-  ctx.defs.push({ tag: 'clipPath', attrs: { id: cid, clipPathUnits: 'userSpaceOnUse' }, children: [{ tag: 'path', attrs: { d, 'clip-rule': fillRule || null } }] });
+  ctx.addDef({ tag: 'clipPath', attrs: { id: cid, clipPathUnits: 'userSpaceOnUse' }, children: [{ tag: 'path', attrs: { d, 'clip-rule': fillRule || null } }] });
   return { tag: 'g', attrs: { 'clip-path': `url(#${cid})` }, children: bands };
 }
 
@@ -1349,7 +1396,7 @@ function evalNode(node, t, ctx, key, copy, extraScale = 1) {
       merge.push('sh');
     } else merge.push(src);
     prims.push({ tag: 'feMerge', attrs: {}, children: merge.map((m) => ({ tag: 'feMergeNode', attrs: { in: m } })) });
-    ctx.defs.push({ tag: 'filter', attrs: { id: fid, x: '-50%', y: '-50%', width: '200%', height: '200%', 'color-interpolation-filters': 'sRGB' }, children: prims });
+    ctx.addDef({ tag: 'filter', attrs: { id: fid, x: '-50%', y: '-50%', width: '200%', height: '200%', 'color-interpolation-filters': 'sRGB' }, children: prims });
     g.attrs.filter = `url(#${fid})`;
   }
   const blend = Pt('blend');
@@ -1360,8 +1407,14 @@ function evalNode(node, t, ctx, key, copy, extraScale = 1) {
     // предок выбранных узлов: только трансформация
   } else if (node.type === 'image') {
     const el = imageElement(node, Pt, T, ctx, nkey);
-    if (H) el.attrs.filter = heightFilter(ctx, rel, true);
-    g.children.push(el);
+    // фильтр высоты — на обёртке: у кадра спрайт-листа (вложенный <svg>) фильтр иначе видит весь лист
+    if (H) {
+      const w = Pt('width'), h = Pt('height');
+      g.children.push({ tag: 'g', attrs: { filter: heightFilter(ctx, rel, true, [-w / 2, -h / 2, w, h]) }, children: [el] });
+    }
+    else g.children.push(el);
+  } else if (node.type === 'light') {
+    // источник света ничего не рисует: его собирает collectLights
   } else if (node.type !== 'group') {
     const dith = H ? null : effectiveDither(node, Pt, ctx);
     const hv = H ? grayHex(rel.height) : null;
@@ -1427,7 +1480,46 @@ function evalNode(node, t, ctx, key, copy, extraScale = 1) {
   return g;
 }
 
+/**
+ * Статичное поддерево: ничего не зависит от времени (нет ключей, анимирующих модификаторов, спрайт-листов
+ * по fps, IK, состояний). Его вычисленный вид можно переиспользовать между кадрами (opts.cache — плеер).
+ */
+function staticTree(c, n) {
+  const memo = c.stat;
+  if (memo.has(n.id)) return memo.get(n.id);
+  memo.set(n.id, false); // защита от циклов
+  const p = n.props || {};
+  let s = !c.ikAffected.has(n.id) && !c.stateAffected.has(n.id) && p.inPoint == null && p.outPoint == null;
+  if (s && n.keys) for (const k in n.keys) if (n.keys[k].length > 1) { s = false; break; }
+  if (s && n.mods) s = n.mods.every((m) => m.enabled === false || (m.type === 'deform' && m.speed === 0 && m.start == null && m.end == null && m.weight == null));
+  const live = (v) => v && typeof v === 'object' && v.shape === 'blob' && (v.speed ?? 0.5) !== 0;
+  if (s && (n.type === 'blob' && (p.speed ?? 0.5) !== 0)) s = false;
+  if (s && (live(p.d) || live(p.shape))) s = false;
+  if (s && n.type === 'image' && p.sheet && p.frame == null && !n.keys?.frame) s = false;
+  if (s && n.type === 'light') s = false;
+  if (s) for (const k of ['clip', 'mask']) if (p[k] && c.byId.has(p[k]) && !staticTree(c, c.byId.get(p[k]))) s = false;
+  if (s) for (const ch of c.children.get(n.id) || []) if (!staticTree(c, ch)) { s = false; break; }
+  memo.set(n.id, s);
+  return s;
+}
+
 function evalWithClip(node, t, ctx, key, copy) {
+  if (ctx.cache && !ctx.recording && !ctx.allowed && ctx.mode === 'color' && !ctx.inClip && copy === 0 && staticTree(ctx.c, node)) {
+    const ck = `${node.id}|${key}|${ctx.prefix}`;
+    const hit = ctx.c.evalCache.get(ck);
+    if (hit) { for (const d of hit.defs) ctx.addDef(d); return hit.el; }
+    const defs = [];
+    ctx.recording = true; ctx.recorders.push(defs);
+    let el;
+    try { el = evalWithClipRaw(node, t, ctx, key, copy); }
+    finally { ctx.recorders.pop(); ctx.recording = false; }
+    ctx.c.evalCache.set(ck, { el, defs });
+    return el;
+  }
+  return evalWithClipRaw(node, t, ctx, key, copy);
+}
+
+function evalWithClipRaw(node, t, ctx, key, copy) {
   const el = evalNode(node, t, ctx, key, copy);
   if (!el) return null;
   const p = node.props || {};
@@ -1443,10 +1535,10 @@ function evalWithClip(node, t, ctx, key, copy) {
     if (!content) { if (kind === 'clip') return null; continue; }
     const id = ctx.id(`${node.id}${key}-${ref}`, kind === 'clip' ? 'c' : 'm');
     if (kind === 'clip') {
-      ctx.defs.push({ tag: 'clipPath', attrs: { id, clipPathUnits: 'userSpaceOnUse' }, children: flattenShapes(content) });
+      ctx.addDef({ tag: 'clipPath', attrs: { id, clipPathUnits: 'userSpaceOnUse' }, children: flattenShapes(content) });
       wrap = { tag: 'g', attrs: { 'clip-path': `url(#${id})` }, children: [wrap] };
     } else {
-      ctx.defs.push({ tag: 'mask', attrs: { id, maskUnits: 'userSpaceOnUse', x: -1e5, y: -1e5, width: 2e5, height: 2e5 }, children: [content] });
+      ctx.addDef({ tag: 'mask', attrs: { id, maskUnits: 'userSpaceOnUse', x: -1e5, y: -1e5, width: 2e5, height: 2e5 }, children: [content] });
       wrap = { tag: 'g', attrs: { mask: `url(#${id})` }, children: [wrap] };
     }
   }
@@ -1464,6 +1556,7 @@ function flattenShapes(n, tf = '', out = []) {
 /** Вычислить сцену в момент t. Возвращает дерево отображения {tag, attrs, children}. */
 export function evaluate(scene, t, opts = {}) {
   const ctx = new Ctx(scene, opts);
+  if (ctx.c.ik.length) solveIK(ctx, t);
   const roots = ctx.c.children.get(null) || [];
   const body = [];
   for (const n of roots) {
@@ -1477,11 +1570,165 @@ export function evaluate(scene, t, opts = {}) {
   // viewBox: [x, y, w, h] — кадрирование (например, для вырезки слоя)
   const vb = opts.viewBox || [0, 0, scene.width, scene.height];
   const ow = opts.width ?? vb[2];
+  // пиксельный режим: без сглаживания краёв (растр потом увеличивается без фильтрации)
+  const crisp = opts.crisp ?? false;
   return {
     tag: 'svg',
-    attrs: { xmlns: 'http://www.w3.org/2000/svg', 'xmlns:xlink': 'http://www.w3.org/1999/xlink', viewBox: vb.map(fmt).join(' '), width: ow, height: opts.height ?? Math.round((ow * vb[3]) / vb[2]) },
+    attrs: { xmlns: 'http://www.w3.org/2000/svg', 'xmlns:xlink': 'http://www.w3.org/1999/xlink', viewBox: vb.map(fmt).join(' '), width: ow, height: opts.height ?? Math.round((ow * vb[3]) / vb[2]),
+      'shape-rendering': crisp ? 'crispEdges' : null, 'image-rendering': crisp ? 'optimizeSpeed' : null, 'text-rendering': crisp ? 'optimizeSpeed' : null },
     children: [{ tag: 'defs', attrs: {}, children: ctx.defs }, ...bg, ...body],
   };
+}
+
+/* =========================================================================
+ * 8а. Матрицы, мировые координаты, IK, свет
+ *     Матрица [a, b, c, d, e, f]: x' = a·x + c·y + e, y' = b·x + d·y + f (как в SVG)
+ * ========================================================================= */
+
+export const mat = {
+  id: () => [1, 0, 0, 1, 0, 0],
+  mul: (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]],
+  inv: (m) => {
+    const det = m[0] * m[3] - m[1] * m[2] || 1e-12;
+    return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det];
+  },
+  apply: (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]],
+  /** translate(x,y) rotate(r) skewX(k) scale(sx,sy) translate(-ax,-ay) — как transform узла. */
+  compose: ({ x = 0, y = 0, rotation = 0, skewX = 0, scaleX = 1, scaleY = 1, anchorX = 0, anchorY = 0 }) => {
+    const r = rotation * DEG, cs = Math.cos(r), sn = Math.sin(r), k = Math.tan(skewX * DEG);
+    // R·K = [cs, sn, cs·k − sn, sn·k + cs]
+    const a = cs * scaleX, b = sn * scaleX, c = (cs * k - sn) * scaleY, d = (sn * k + cs) * scaleY;
+    return [a, b, c, d, x - (a * anchorX + c * anchorY), y - (b * anchorX + d * anchorY)];
+  },
+};
+
+/** Локальные значения трансформации узла в его локальное время T. */
+function localTf(node, T, ctx) {
+  const P = (n) => propValue(node, n, T, ctx, 0);
+  const sc = P('scale');
+  return { x: P('x'), y: P('y'), rotation: P('rotation'), skewX: P('skewX'), scaleX: sc * P('scaleX'), scaleY: sc * P('scaleY'), anchorX: P('anchorX'), anchorY: P('anchorY') };
+}
+const localTime = (node, T) => (T - (node.props?.timeOffset ?? 0)) * (node.props?.timeScale ?? 1);
+
+/** Мировая матрица узла (включая его собственную трансформацию) и его локальное время. */
+function worldOf(ctx, id, t) {
+  const chain = [];
+  let n = id ? ctx.c.byId.get(id) : null;
+  while (n) { chain.unshift(n); n = n.parent ? ctx.c.byId.get(n.parent) : null; }
+  let m = mat.id(), T = t;
+  for (const x of chain) { T = localTime(x, T); m = mat.mul(m, mat.compose(localTf(x, T, ctx))); }
+  return { m, T };
+}
+
+/** Мировая матрица узла в момент t (с учётом IK и состояний). */
+export function nodeWorldMatrix(scene, id, t = 0, opts = {}) {
+  const ctx = new Ctx(scene, opts);
+  if (ctx.c.ik.length) solveIK(ctx, t);
+  return worldOf(ctx, id, t).m;
+}
+
+const wrapDeg = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
+/** Двухзвенный IK: поворачивает деда (A) и родителя (B) конечного узла E так, чтобы E оказался в точке цели. */
+function solveIK(ctx, t) {
+  ctx.ikRot = new Map();
+  const by = ctx.c.byId;
+  for (const ch of ctx.c.ik) {
+    const A = by.get(ch.root), B = by.get(ch.mid), E = by.get(ch.end), tgt = by.get(ch.cfg.target);
+    const { m: PA, T: TP } = worldOf(ctx, A.parent, t);
+    const TA = localTime(A, TP), TB = localTime(B, TA), TE = localTime(E, TB);
+    const a = localTf(A, TA, ctx), b = localTf(B, TB, ctx), e = localTf(E, TE, ctx);
+    const wIK = clamp(propValue(E, 'ikWeight', TE, ctx) ?? 1);
+    // цель — точка опоры (anchor) целевого узла
+    const tw = worldOf(ctx, tgt.id, t);
+    const ta = localTf(tgt, tw.T, ctx);
+    const [gx, gy] = mat.apply(mat.inv(PA), ...mat.apply(tw.m, ta.anchorX, ta.anchorY));
+    // звенья в повёрнутой системе A (до поворота): u0 — к суставу B, w — от B к E
+    const u0 = [a.scaleX * (b.x - a.anchorX), a.scaleY * (b.y - a.anchorY)];
+    const w2 = [b.scaleX * (e.x - b.anchorX), b.scaleY * (e.y - b.anchorY)];
+    const s = Math.sqrt(Math.abs(a.scaleX * a.scaleY)) || 1, refl = a.scaleX * a.scaleY < 0, sg = refl ? -1 : 1;
+    const wF = [Math.sign(a.scaleX || 1) * w2[0], Math.sign(a.scaleY || 1) * w2[1]];
+    const L1 = Math.hypot(...u0), L2 = s * Math.hypot(...wF);
+    if (L1 < 1e-6 || L2 < 1e-6) continue;
+    const dx = gx - a.x, dy = gy - a.y;
+    const D = clamp(Math.hypot(dx, dy), Math.abs(L1 - L2) + 1e-4, L1 + L2 - 1e-4);
+    const phi = Math.acos(clamp((D * D - L1 * L1 - L2 * L2) / (2 * L1 * L2), -1, 1));
+    const angU = Math.atan2(u0[1], u0[0]), angW = Math.atan2(wF[1], wF[0]);
+    // сторона сгиба: явно (bend: 1|-1) или как в текущей (FK) позе
+    let side = ch.cfg.bend;
+    if (side !== 1 && side !== -1) {
+      const rel = wrapDeg(sg * b.rotation + (angW - angU) / DEG);
+      side = rel < 0 ? -1 : 1;
+    }
+    if (ch.cfg.flip) side = -side;
+    const thB = sg * (angU + side * phi - angW);
+    const sec = [s * Math.cos(sg * thB + angW) * Math.hypot(...wF), s * Math.sin(sg * thB + angW) * Math.hypot(...wF)];
+    const thA = Math.atan2(dy, dx) - Math.atan2(u0[1] + sec[1], u0[0] + sec[0]);
+    const blend = (fk, ik) => fk + wrapDeg(ik - fk) * wIK;
+    ctx.ikRot.set(A.id, blend(a.rotation, thA / DEG));
+    ctx.ikRot.set(B.id, blend(b.rotation, thB / DEG));
+    if (ch.cfg.orient) {
+      // конечное звено повторяет поворот цели (например, стопа стоит ровно на полу)
+      const MB = worldOf(ctx, B.id, t).m;
+      const angB = Math.atan2(MB[1], MB[0]), angT = Math.atan2(tw.m[1], tw.m[0]);
+      const r = (MB[0] * MB[3] - MB[1] * MB[2] < 0 ? angB - angT : angT - angB) / DEG + (ch.cfg.orientOffset ?? 0);
+      ctx.ikRot.set(E.id, blend(e.rotation, r));
+    }
+  }
+}
+
+/** Источники света в момент t: мировая позиция, высота, цвет, энергия, радиус. */
+export function collectLights(scene, t = 0, opts = {}) {
+  const ctx = new Ctx(scene, opts);
+  if (ctx.c.ik.length) solveIK(ctx, t);
+  const out = [];
+  for (const n of scene.nodes) {
+    if (n.type !== 'light') continue;
+    const { m, T } = worldOf(ctx, n.id, t);
+    const P = (k) => propValue(n, k, T, ctx);
+    if (P('visible') === false || P('enabled') === false) continue;
+    let hidden = false;
+    for (let p = n.parent; p && !hidden; p = ctx.c.byId.get(p)?.parent) { const pn = ctx.c.byId.get(p); if (pn && propValue(pn, 'visible', t, ctx) === false) hidden = true; }
+    if (hidden) continue;
+    const [x, y] = mat.apply(m, P('anchorX'), P('anchorY'));
+    const k = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
+    out.push({ id: n.id, x, y, z: P('z'), color: P('color'), energy: P('energy') * clamp(P('opacity')), radius: P('radius') * k, falloff: P('falloff') ?? 1 });
+  }
+  return out;
+}
+
+/* =========================================================================
+ * 8б. Пиксельный режим: палитра
+ * ========================================================================= */
+
+/** Привести RGBA-пиксели к ближайшим цветам палитры (на месте). palette — массив цветов CSS. */
+export function quantizeRGBA(data, palette) {
+  const pal = (palette || []).map(parseColor).filter(Boolean).map((c) => [Math.round(c[0] * 255), Math.round(c[1] * 255), Math.round(c[2] * 255)]);
+  if (!pal.length) return data;
+  const memo = new Map();
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] === 0) continue;
+    const key = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+    let best = memo.get(key);
+    if (best === undefined) {
+      let bd = Infinity;
+      for (let j = 0; j < pal.length; j++) {
+        // взвешенное расстояние (ближе к восприятию, чем простое RGB)
+        const dr = data[i] - pal[j][0], dg = data[i + 1] - pal[j][1], db = data[i + 2] - pal[j][2];
+        const d = 2 * dr * dr + 4 * dg * dg + 3 * db * db;
+        if (d < bd) { bd = d; best = j; }
+      }
+      memo.set(key, best);
+    }
+    data[i] = pal[best][0]; data[i + 1] = pal[best][1]; data[i + 2] = pal[best][2];
+    data[i + 3] = data[i + 3] < 128 ? 0 : 255;
+  }
+  return data;
+}
+/** Настройки пиксельного режима сцены или null. */
+export function pixelOf(scene) {
+  const p = scene.pixel;
+  if (!p || p.enabled === false || !(p.size >= 1)) return null;
+  return { size: p.size, palette: p.palette || null, aa: !!p.aa };
 }
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1536,7 +1783,8 @@ export class DOMRenderer {
 
 export class Player {
   constructor(container, scene, opts = {}) {
-    this.renderer = new DOMRenderer(container);
+    this.renderer = opts.renderer || new DOMRenderer(container);
+    this.states = opts.states || {};
     this.scene = scene; this.time = 0; this.playing = false; this.speed = 1; this.listeners = new Set();
     this.loop = opts.loop ?? scene.loop ?? true;
     this._tick = this._tick.bind(this);
@@ -1546,8 +1794,10 @@ export class Player {
   setScene(scene, keepTime = true) { invalidate(this.scene); this.scene = scene; invalidate(scene); if (this.clip) this.clip = clipRange(scene, this.clip.name); if (!keepTime) this.time = this.clip ? this.clip.start : 0; this.time = Math.min(this.time, scene.duration); this.draw(); }
   refresh() { invalidate(this.scene); this.draw(); }
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
+  /** Выбрать вариант группы состояний (null — вернуть по умолчанию). */
+  setState(name, value) { if (value == null) delete this.states[name]; else this.states[name] = value; this.refresh(); }
   draw() {
-    try { this.renderer.render(evaluate(this.scene, this.time)); this.error = null; }
+    try { this.renderer.render(evaluate(this.scene, this.time, { cache: true, states: this.states }), this); this.error = null; }
     catch (e) { this.error = e; console.error(e); }
     for (const f of this.listeners) f(this.time, this);
   }
@@ -1625,7 +1875,9 @@ export const ops = {
         if (x.parent === id) x.parent = newId;
         for (const k of ['clip', 'mask']) if (x.props?.[k] === id) x.props[k] = newId;
         for (const m of x.mods || []) { if (m.source === id) m.source = newId; if (m.path === id) m.path = newId; }
+        if (x.props?.ik?.target === id) x.props.ik = { ...x.props.ik, target: newId };
       }
+      for (const g of scene.states || []) for (const patch of Object.values(g.values || {})) if (patch[id]) { patch[newId] = patch[id]; delete patch[id]; }
       n.id = newId;
     }
     invalidate(scene);
@@ -1777,6 +2029,185 @@ Object.assign(ops, {
   },
 });
 
+/* ---------- состояния, IK, пиксели, свет ---------- */
+Object.assign(ops, {
+  /** Группа состояний: { name, default, values: { вариант: { id узла: { свойство: значение } } } }. */
+  setState(scene, { name, values, default: def }) {
+    if (!name || typeof name !== 'string') throw new Error('Нужно имя группы состояний');
+    if (!values || typeof values !== 'object' || !Object.keys(values).length) throw new Error('values: нужен хотя бы один вариант');
+    for (const patch of Object.values(values)) for (const id of Object.keys(patch || {})) getNode(scene, id);
+    scene.states = scene.states || [];
+    const g = { name, default: def ?? Object.keys(values)[0], values: JSON.parse(JSON.stringify(values)) };
+    if (!(g.default in g.values)) throw new Error(`default «${g.default}» нет среди вариантов: ${Object.keys(values).join(', ')}`);
+    const i = scene.states.findIndex((x) => x.name === name);
+    if (i >= 0) scene.states[i] = g; else scene.states.push(g);
+    invalidate(scene);
+    return g;
+  },
+  removeState(scene, name) {
+    const before = scene.states?.length || 0;
+    scene.states = (scene.states || []).filter((g) => g.name !== name);
+    if (!scene.states.length) delete scene.states;
+    invalidate(scene);
+    return before - (scene.states?.length || 0);
+  },
+  /** IK на конечном узле id: цель target, сгиб bend (1|-1), orient — конечное звено повторяет поворот цели. null — снять. */
+  setIK(scene, id, cfg) {
+    const n = getNode(scene, id);
+    if (!cfg) { if (n.props) delete n.props.ik; invalidate(scene); return null; }
+    getNode(scene, cfg.target);
+    const B = n.parent && getNode(scene, n.parent), A = B && B.parent && getNode(scene, B.parent);
+    if (!A) throw new Error(`У «${id}» нужны родитель и дед — два звена цепочки (например бедро → голень → стопа)`);
+    if (cfg.target === id || cfg.target === B.id || cfg.target === A.id) throw new Error('Цель IK не может быть звеном самой цепочки');
+    n.props = { ...n.props, ik: { target: cfg.target, ...(cfg.bend ? { bend: cfg.bend } : {}), ...(cfg.flip ? { flip: true } : {}), ...(cfg.orient ? { orient: true } : {}), ...(cfg.orientOffset ? { orientOffset: cfg.orientOffset } : {}) } };
+    invalidate(scene);
+    return n.props.ik;
+  },
+  setPixel(scene, cfg) {
+    if (!cfg || cfg.enabled === false) { if (scene.pixel) scene.pixel.enabled = false; if (!cfg) delete scene.pixel; invalidate(scene); return scene.pixel || null; }
+    const size = cfg.size ?? scene.pixel?.size ?? 6;
+    if (!(size >= 1)) throw new Error('size — размер пикселя в единицах сцены, ≥ 1');
+    scene.pixel = { enabled: true, size, ...(cfg.palette ? { palette: cfg.palette } : scene.pixel?.palette ? { palette: scene.pixel.palette } : {}), ...(cfg.aa ? { aa: true } : {}) };
+    invalidate(scene);
+    return scene.pixel;
+  },
+});
+
+/* =========================================================================
+ * 10а. Правки поверх сцены (edits)
+ *      Сцену рисует скрипт, человек правит её в редакторе — правки хранятся отдельно (<имя>.edits.json)
+ *      и накладываются на свежую сцену после каждой пересборки.
+ * ========================================================================= */
+
+const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+function stable(v) {
+  if (Array.isArray(v)) return '[' + v.map(stable).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}';
+  return JSON.stringify(v ?? null);
+}
+const same = (a, b) => a === b || stable(a) === stable(b);
+function kidsMap(scene) {
+  const m = new Map();
+  for (const n of scene.nodes) { const p = n.parent ?? null; if (!m.has(p)) m.set(p, []); m.get(p).push(n.id); }
+  return m;
+}
+/** Наибольшая общая подпоследовательность (id), чтобы записывать только реальные перестановки. */
+function lcsSet(a, b) {
+  const n = a.length, m = b.length;
+  if (!n || !m) return new Set();
+  if (n * m > 4e6) return new Set(a.filter((x, i) => b[i] === x));
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = new Set();
+  for (let i = 0, j = 0; i < n && j < m;) { if (a[i] === b[j]) { out.add(a[i]); i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) i++; else j++; }
+  return out;
+}
+
+/** Разница между исходной сценой и правленой → объект правок. */
+export function diffScenes(base, cur) {
+  const ed = { kontur: 'edits', version: 1, scene: {}, nodes: {}, removed: [], order: [] };
+  for (const k of new Set([...Object.keys(base), ...Object.keys(cur)])) {
+    if (k === 'nodes') continue;
+    if (!same(base[k], cur[k])) ed.scene[k] = cur[k] === undefined ? null : clone(cur[k]);
+  }
+  const bMap = new Map(base.nodes.map((n) => [n.id, n])), cMap = new Map(cur.nodes.map((n) => [n.id, n]));
+  for (const n of base.nodes) if (!cMap.has(n.id)) ed.removed.push(n.id);
+  for (const n of cur.nodes) {
+    const b = bMap.get(n.id);
+    if (!b) continue;
+    const e = {}, bp = b.props || {}, cp = n.props || {}, props = {}, unset = [], was = {};
+    for (const k in cp) if (!same(bp[k], cp[k])) { props[k] = clone(cp[k]); if (k in bp) was[k] = clone(bp[k]); }
+    for (const k in bp) if (!(k in cp)) { unset.push(k); was[k] = clone(bp[k]); }
+    if (Object.keys(props).length) e.props = props;
+    if (unset.length) e.unset = unset;
+    const bk = b.keys || {}, ck = n.keys || {}, keys = {};
+    for (const k of new Set([...Object.keys(bk), ...Object.keys(ck)])) if (!same(bk[k], ck[k])) keys[k] = ck[k] ? clone(ck[k]) : null;
+    if (Object.keys(keys).length) e.keys = keys;
+    if (!same(b.mods, n.mods)) e.mods = n.mods ? clone(n.mods) : null;
+    if (n.type !== b.type) e.setType = n.type;
+    if (Object.keys(e).length) { e.base = { type: b.type, parent: b.parent ?? null }; if (Object.keys(was).length) e.was = was; ed.nodes[n.id] = e; }
+  }
+  // порядок и новые узлы: по каждому родителю — что не входит в общую подпоследовательность
+  const bk = kidsMap(base), ck = kidsMap(cur), stay = new Set();
+  for (const [p, cids] of ck) {
+    const common = cids.filter((id) => bMap.has(id) && (bMap.get(id).parent ?? null) === p);
+    const bcommon = (bk.get(p) || []).filter((id) => cMap.has(id) && (cMap.get(id).parent ?? null) === p);
+    for (const id of lcsSet(bcommon, common)) stay.add(id);
+  }
+  for (const n of cur.nodes) {
+    if (stay.has(n.id)) continue;
+    const p = n.parent ?? null, sib = ck.get(p), i = sib.indexOf(n.id);
+    const o = { id: n.id, parent: p, after: i > 0 ? sib[i - 1] : null };
+    if (!bMap.has(n.id)) o.add = clone(n);
+    ed.order.push(o);
+  }
+  return ed;
+}
+/** Пустые ли правки. */
+export function editsEmpty(ed) {
+  return !ed || (!Object.keys(ed.scene || {}).length && !Object.keys(ed.nodes || {}).length && !(ed.removed || []).length && !(ed.order || []).length);
+}
+/** Число правленых объектов (для интерфейса). */
+export function editsCount(ed) {
+  if (!ed) return 0;
+  return new Set([...Object.keys(ed.nodes || {}), ...(ed.removed || []), ...(ed.order || []).map((o) => o.id)]).size + (Object.keys(ed.scene || {}).length ? 1 : 0);
+}
+
+/** Наложить правки на исходную сцену → { scene, warnings }. Исходная сцена не меняется. */
+export function applyEdits(base, ed) {
+  const s = clone(base), warnings = [];
+  if (!ed || editsEmpty(ed)) return { scene: s, warnings };
+  for (const k in ed.scene || {}) { if (ed.scene[k] === null) delete s[k]; else s[k] = clone(ed.scene[k]); }
+  if ((ed.removed || []).length) {
+    const kill = new Set(), ids = new Set(s.nodes.map((n) => n.id));
+    for (const id of ed.removed) if (ids.has(id)) kill.add(id);
+    let grew = true;
+    while (grew) { grew = false; for (const n of s.nodes) if (n.parent && kill.has(n.parent) && !kill.has(n.id)) { kill.add(n.id); grew = true; } }
+    s.nodes = s.nodes.filter((n) => !kill.has(n.id));
+  }
+  const byId = new Map(s.nodes.map((n) => [n.id, n]));
+  for (const [id, e] of Object.entries(ed.nodes || {})) {
+    const n = byId.get(id);
+    if (!n) { warnings.push(`«${id}»: такого объекта нет в исходной сцене — правка не применена`); continue; }
+    if (e.base && e.base.type !== n.type) { warnings.push(`«${id}»: был ${e.base.type}, теперь ${n.type} — правка не применена (id сдвинулись?)`); continue; }
+    if (e.base && (e.base.parent ?? null) !== (n.parent ?? null)) warnings.push(`«${id}»: в исходной сцене сменился родитель (${e.base.parent ?? 'корень'} → ${n.parent ?? 'корень'})`);
+    for (const k in e.was || {}) if (!same(e.was[k], n.props?.[k])) warnings.push(`«${id}».${k}: скрипт поменял значение, оставлена ваша правка`);
+    if (e.props || e.unset) { n.props = { ...(n.props || {}), ...clone(e.props || {}) }; for (const k of e.unset || []) delete n.props[k]; }
+    if (e.keys) {
+      n.keys = n.keys || {};
+      for (const p in e.keys) { if (e.keys[p] === null) delete n.keys[p]; else n.keys[p] = clone(e.keys[p]); }
+      if (!Object.keys(n.keys).length) delete n.keys;
+    }
+    if ('mods' in e) { if (e.mods === null) delete n.mods; else n.mods = clone(e.mods); }
+    if (e.setType) n.type = e.setType;
+  }
+  for (const o of ed.order || []) {
+    let n;
+    if (o.add) {
+      n = clone(o.add);
+      if (byId.has(n.id)) {
+        const old = n.id; let i = 2; while (byId.has(`${old}_${i}`)) i++;
+        n.id = `${old}_${i}`;
+        warnings.push(`«${old}»: такой id появился в исходной сцене — ваш объект переименован в «${n.id}»`);
+      }
+      byId.set(n.id, n);
+    } else {
+      n = byId.get(o.id);
+      if (!n) continue;
+      s.nodes.splice(s.nodes.indexOf(n), 1);
+    }
+    const par = o.parent ?? null;
+    if (par && !byId.has(par)) { warnings.push(`«${n.id}»: родителя «${par}» нет — объект перенесён в корень`); n.parent = null; }
+    else n.parent = par;
+    const aft = o.after && byId.get(o.after);
+    let idx;
+    if (aft && (aft.parent ?? null) === (n.parent ?? null) && s.nodes.includes(aft)) idx = s.nodes.indexOf(aft) + 1;
+    else { const f = s.nodes.findIndex((x) => (x.parent ?? null) === (n.parent ?? null)); idx = f < 0 ? s.nodes.length : f; }
+    s.nodes.splice(idx, 0, n);
+  }
+  return { scene: s, warnings };
+}
+
 /** Проверка сцены: возвращает список проблем. */
 export function validateScene(scene) {
   const errs = [];
@@ -1803,6 +2234,22 @@ export function validateScene(scene) {
     if (!(c.end > c.start)) errs.push(`Клип ${c.name}: end должен быть больше start`);
     if (c.end > scene.duration + 1e-6) errs.push(`Клип ${c.name} выходит за длительность сцены (${scene.duration}s)`);
     if (c.next && !(scene.clips || []).some((x) => x.name === c.next)) errs.push(`Клип ${c.name}: next ссылается на несуществующий ${c.next}`);
+  }
+  const sn = new Set();
+  for (const g of scene.states || []) {
+    if (!g.name) errs.push('Группа состояний без имени');
+    if (sn.has(g.name)) errs.push(`Повтор группы состояний ${g.name}`);
+    sn.add(g.name);
+    if (!g.values || typeof g.values !== 'object') { errs.push(`Состояния ${g.name}: нет values`); continue; }
+    if (g.default != null && !(g.default in g.values)) errs.push(`Состояния ${g.name}: default «${g.default}» не среди вариантов`);
+    for (const [v, patch] of Object.entries(g.values)) for (const id of Object.keys(patch || {})) if (!ids.has(id)) errs.push(`Состояние ${g.name}=${v}: узел ${id} не найден`);
+  }
+  for (const n of scene.nodes) {
+    const ik = n.props?.ik;
+    if (!ik) continue;
+    if (!ik.target || !ids.has(ik.target)) errs.push(`${n.id}: цель IK «${ik.target}» не найдена`);
+    const B = scene.nodes.find((x) => x.id === n.parent);
+    if (!B || !B.parent) errs.push(`${n.id}: для IK нужны родитель и дед`);
   }
   if (!errs.length) { try { evaluate(scene, 0); evaluate(scene, scene.duration / 2); } catch (e) { errs.push('Ошибка вычисления: ' + e.message); } }
   return errs;
@@ -1908,5 +2355,11 @@ export function describeScene(scene) {
   };
   walk(null, 0);
   if (scene.clips?.length) lines.push('Клипы: ' + scene.clips.map((c) => `${c.name} [${c.start}–${c.end}s${c.loop === false ? ', один раз' : ''}${c.next ? ` → ${c.next}` : ''}]`).join(', '));
+  if (scene.states?.length) lines.push('Состояния: ' + scene.states.map((g) => `${g.name} = ${Object.keys(g.values || {}).map((v) => (v === g.default ? `[${v}]` : v)).join(' | ')}`).join('; '));
+  if (c.ik.length) lines.push('IK: ' + c.ik.map((k) => `${k.root} → ${k.mid} → ${k.end} ⇢ ${k.cfg.target}`).join('; '));
+  const px = pixelOf(scene);
+  if (px) lines.push(`Пиксельный режим: пиксель ${px.size}, кадр ${Math.round(scene.width / px.size)}×${Math.round(scene.height / px.size)}${px.palette ? `, палитра ${px.palette.length} цв.` : ''}`);
+  const lights = scene.nodes.filter((n) => n.type === 'light').length;
+  if (lights) lines.push(`Свет: источников ${lights}, общий фон ${scene.ambient || '#4a4f5c (по умолчанию)'}`);
   return lines.join('\n');
 }

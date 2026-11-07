@@ -1,13 +1,14 @@
 // Сквозной тест MCP-сервера: протокол, инструменты, превью.
 // node scripts/test-mcp.mjs [папка-для-картинок]
 import { spawn } from 'node:child_process';
-import { writeFileSync, mkdtempSync, existsSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, existsSync, readFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const outDir = process.argv[2] || mkdtempSync(join(tmpdir(), 'kontur-test-'));
 const dir = mkdtempSync(join(tmpdir(), 'kontur-scene-'));
-const srv = spawn(process.execPath, [new URL('../mcp/server.mjs', import.meta.url).pathname], {
+const srv = spawn(process.execPath, [fileURLToPath(new URL('../mcp/server.mjs', import.meta.url))], {
   env: { ...process.env, KONTUR_SCENE: join(dir, 'scene.json'), KONTUR_PORT: '7799' }, stdio: ['pipe', 'pipe', 'pipe'],
 });
 let buf = '', id = 0;
@@ -23,6 +24,7 @@ srv.stdout.on('data', (d) => {
 });
 let stderr = '';
 srv.stderr.on('data', (d) => (stderr += d));
+srv.on('exit', (c) => { if (c) { console.error('сервер упал:', c, stderr.slice(-2000)); process.exit(1); } });
 const rpc = (method, params) => new Promise((res) => { const i = ++id; pending.set(i, res); srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: i, method, params }) + '\n'); });
 const call = async (name, args = {}) => {
   const r = await rpc('tools/call', { name, arguments: args });
@@ -91,8 +93,8 @@ try {
   check(eng.ok, 'превью отдаёт движок');
 
   // растровые слои и дизеринг
-  const tex = new URL('../examples/assets/paint-texture.jpg', import.meta.url).pathname;
-  const sheetPng = new URL('../examples/assets/screen-sheet.png', import.meta.url).pathname;
+  const tex = fileURLToPath(new URL('../examples/assets/paint-texture.jpg', import.meta.url));
+  const sheetPng = fileURLToPath(new URL('../examples/assets/screen-sheet.png', import.meta.url));
   const ia = await call('image_add', { path: tex, id: 'tex', width: 1280, props: { blend: 'overlay', opacity: 0.5 } });
   check(/1280×720/.test(ia.content[0].text), 'image_add: размер по пропорции из файла');
   const ib = await call('image_add', { path: sheetPng, id: 'spr', x: 200, y: 600, width: 128, pixelated: true, sheet: { cols: 4, rows: 2, count: 8, fps: 8 } });
@@ -133,6 +135,48 @@ try {
   check(/Слоёв: \d+/.test(gx) && existsSync(join(gdDir, 'scene.tscn')) && existsSync(join(gdDir, 'kontur_manifest.json')), 'экспорт в Godot: сцена, манифест');
   const tscn = readFileSync(join(gdDir, 'scene.tscn'), 'utf8');
   check(/name": &"idle"/.test(tscn) && /name": &"spin"/.test(tscn) && /CanvasTexture/.test(tscn) && /next_clips = \{"spin": "idle"\}/.test(tscn), 'tscn: анимации по клипам, карты нормалей, переходы');
+
+  // экспорт в Unity: в проект-заглушку (Assets + ProjectSettings, Linear); формат файлов сверен с Unity 6 отдельно
+  const ccU = (await call('compat_check', { target: 'unity' })).content[0].text;
+  check(/export format "unity"/.test(ccU) && /префаб/.test(ccU) && /режим наложения overlay/.test(ccU), 'compat_check для Unity');
+  const uProj = join(dir, 'unity-proj');
+  mkdirSync(join(uProj, 'Assets'), { recursive: true });
+  mkdirSync(join(uProj, 'ProjectSettings'), { recursive: true });
+  writeFileSync(join(uProj, 'ProjectSettings', 'ProjectSettings.asset'), 'PlayerSettings:\n  m_ActiveColorSpace: 1\n');
+  await call('node_add', { id: 'uLight', type: 'light', props: { x: 300, y: 200, z: 60, color: '#ffd090', energy: 1, radius: 300 } });
+  const uDir = join(uProj, 'Assets', 'Kontur', 'Комната');
+  const ux = (await call('export', { format: 'unity', path: uDir, title: 'Room', fps: 6 })).content[0].text;
+  check(/Префаб Room\.prefab/.test(ux) && /клипы \(Animator\): idle@6fps, spin@6fps/.test(ux) && /1 Light2D \+ Ambient \(подобран под Linear\)/.test(ux), 'экспорт в Unity: префаб, клипы, свет');
+  const rt = join(uProj, 'Assets', 'Kontur', 'Runtime');
+  check(['Room.prefab', 'Room.controller', 'Animations/idle.anim', 'Animations/spin.anim', 'Materials/Kontur_overlay.mat', 'kontur_manifest.json'].every((f) => existsSync(join(uDir, f)) && existsSync(join(uDir, f) + '.meta'))
+    && ['KonturPlayer.cs', 'KonturBlend.shader'].every((f) => existsSync(join(rt, f + '.meta'))), 'Unity: все файлы с .meta, скрипт и шейдер — в Assets/Kontur/Runtime');
+  const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]));
+  const metas = new Map(walk(uDir).filter((f) => f.endsWith('.png.meta')).map((f) => [/guid: ([0-9a-f]{32})/.exec(readFileSync(f, 'utf8'))[1], readFileSync(f, 'utf8')]));
+  const pf = readFileSync(join(uDir, 'Room.prefab'), 'utf8');
+  const spriteGuids = [...pf.matchAll(/m_Sprite: \{fileID: 21300000, guid: ([0-9a-f]{32})/g)].map((m) => m[1]);
+  check(spriteGuids.length > 0 && spriteGuids.every((g) => metas.has(g) && /spriteMode: 1/.test(metas.get(g)) && /alignment: 1/.test(metas.get(g)) && /textureType: 8/.test(metas.get(g))), 'Unity: спрайты префаба ссылаются на PNG с импортом Sprite, опора слева сверху');
+  const anchors = new Set([...pf.matchAll(/^--- !u!\d+ &(\d+)/gm)].map((m) => m[1]));
+  const localRefs = [...pf.matchAll(/\{fileID: (\d+)\}/g)].map((m) => m[1]).filter((x) => x !== '0');
+  check(anchors.size > 5 && localRefs.every((x) => anchors.has(x)), `Unity: префаб цельный — все ссылки внутри файла найдены (${anchors.size} объектов)`);
+  check(/m_LightType: 3/.test(pf) && /m_LightType: 4/.test(pf) && /Kontur_overlay|guid: [0-9a-f]{32}, type: 2\}/.test(pf), 'Unity: точечный и общий свет, материал наложения');
+  const ctl = readFileSync(join(uDir, 'Room.controller'), 'utf8');
+  const ctlDocs = ctl.split(/^--- /m);
+  const stateId = (n) => { const d = ctlDocs.find((x) => x.startsWith('!u!1102 ') && x.includes(`m_Name: ${n}\n`)); return d && /&(\d+)/.exec(d)[1]; };
+  check(stateId('idle') && stateId('spin') && ctl.includes(`m_DstState: {fileID: ${stateId('idle')}}`) && ctl.includes(`m_DefaultState: {fileID: ${stateId('idle')}}`), 'Unity: контроллер — состояния клипов, spin → idle, по умолчанию idle');
+  const spin = readFileSync(join(uDir, 'Animations', 'spin.anim'), 'utf8');
+  const uc = await import('../mcp/unity_common.mjs'), ly = await import('../mcp/layers.mjs');
+  const { crc32 } = uc;
+  check(crc32('L01') === 140090239, 'CRC32 пути совпадает с Unity');
+  check(Math.abs(uc.urpFalloffIntensity(1) - 0.5) < 1e-3, 'спад URP: falloff 1 → falloffIntensity 0.5');
+  const fg = uc.fitUrpLight({ ambient: [0.3, 0.3, 0.3], energy: 1.2, falloff: 1.5, linear: false });
+  check(fg.intensity === 1.2 && fg.exponent === 1.5, 'свет в Gamma-проекте переносится как есть');
+  const sn = ly.safeNames(['ходьба', 'прыжок', 'ъ', 'ь', 'idle'], 'clip');
+  check(sn.get('ходьба') === 'hodba' && sn.get('прыжок') === 'pryzhok' && sn.get('ъ') !== sn.get('ь') && sn.get('idle') === 'idle', 'имена файлов: кириллица латиницей, без совпадений');
+  const animPath = /path: (L\d+_\w+)\n/.exec(spin)?.[1];
+  check(/m_LoopTime: 0/.test(spin) && /m_LoopTime: 1/.test(readFileSync(join(uDir, 'Animations', 'idle.anim'), 'utf8')) && animPath && spin.includes(`path: ${crc32(animPath)}\n`) && /m_StopTime: 2\n/.test(spin), 'Unity: клипы — повтор, привязка по CRC32 пути, длина');
+  await call('export', { format: 'unity', path: uDir, title: 'Room', fps: 6 });
+  check(readFileSync(join(uDir, 'Room.prefab'), 'utf8') === pf, 'Unity: повторный экспорт даёт те же GUID и fileID (ссылки в сценах не рвутся)');
+  await call('node_remove', { id: 'uLight' });
 
   await call('scene_open', { path: 'examples/bay.json' });
   const bayTex = JSON.parse((await call('scene_get_json', { id: 'paint' })).content[0].text).props.src;

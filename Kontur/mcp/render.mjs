@@ -3,9 +3,14 @@
 // Видео: ffmpeg.
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, cpus } from 'node:os';
 import { join, resolve, isAbsolute, extname } from 'node:path';
-import { evaluate, treeToString, renderSVG } from '../engine/kontur.js';
+import { evaluate, treeToString, renderSVG, pixelOf, quantizeRGBA, collectLights, parseColor } from '../engine/kontur.js';
+import { decodePNG, encodePNG } from './normals.mjs';
+// resvg рендерит в пуле потоков libuv: несколько кадров считаются параллельно
+if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = String(Math.min(8, Math.max(4, cpus().length - 2)));
+/** Сколько кадров растеризовать одновременно. */
+export const PARALLEL = Math.max(1, +(process.env.UV_THREADPOOL_SIZE || 4));
 
 /* ---------------- растровые ассеты ---------------- */
 export const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.avif': 'image/avif' };
@@ -76,11 +81,11 @@ const which = (cmd) => {
   return r.status === 0 ? r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean) : [];
 };
 const has = (cmd) => which(cmd).length > 0;
-let resvg;
-try { resvg = (await import('@resvg/resvg-js')).Resvg; }
+let resvg, resvgAsync;
+try { const m = await import('@resvg/resvg-js'); resvg = m.Resvg; resvgAsync = m.renderAsync; }
 catch {
   // также ищем пакет в папке kontur, даже если сервер запущен из другого каталога
-  try { const { createRequire } = await import('node:module'); resvg = createRequire(new URL('../package.json', import.meta.url))('@resvg/resvg-js').Resvg; } catch { resvg = null; }
+  try { const { createRequire } = await import('node:module'); const m = createRequire(new URL('../package.json', import.meta.url))('@resvg/resvg-js'); resvg = m.Resvg; resvgAsync = m.renderAsync; } catch { resvg = null; }
 }
 
 function findMagick() {
@@ -127,14 +132,19 @@ function run(cmd, args, input, timeout = 120000) {
 const svgW = (svg) => +(/<svg[^>]*\swidth="([\d.]+)"/.exec(svg)?.[1] || 0);
 const svgH = (svg) => +(/<svg[^>]*\sheight="([\d.]+)"/.exec(svg)?.[1] || 0);
 const BACKENDS = {
-  'resvg-js': async (svg, width) => Buffer.from(new resvg(svg, { fitTo: width ? { mode: 'width', value: width } : { mode: 'original' }, font: { loadSystemFonts: true } }).render().asPng()),
+  'resvg-js': async (svg, width) => {
+    // системные шрифты грузятся только для кадров с текстом — это заметная часть времени
+    const opts = { fitTo: width ? { mode: 'width', value: width } : { mode: 'original' }, font: { loadSystemFonts: svg.includes('<text') } };
+    if (resvgAsync) return Buffer.from((await resvgAsync(svg, opts)).asPng());
+    return Buffer.from(new resvg(svg, opts).render().asPng());
+  },
   'rsvg-convert': (svg, width) => run('rsvg-convert', ['-f', 'png', ...(width ? ['-w', String(width)] : [])], Buffer.from(svg)),
   imagemagick: (svg, width) => run(capabilities.candidates.imagemagick, ['-background', 'none', 'svg:-', ...(width ? ['-resize', `${width}x`] : []), 'png:-'], Buffer.from(svg)),
   browser: async (svg, width) => {
     const dir = mkdtempSync(join(tmpdir(), 'kontur-b-'));
     try {
       const w0 = svgW(svg) || 800, h0 = svgH(svg) || 600, w = Math.round(width || w0), h = Math.round((h0 * w) / w0);
-      const html = `<!doctype html><html><head><style>html,body{margin:0;background:transparent}svg{display:block;width:${w}px;height:${h}px}</style></head><body>${svg}</body></html>`;
+      const html = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:transparent}svg{display:block;width:${w}px;height:${h}px}</style></head><body>${svg}</body></html>`;
       const f = join(dir, 'f.html'), out = join(dir, 'f.png');
       writeFileSync(f, html);
       await run(capabilities.candidates.browser, ['--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars', '--default-background-color=00000000',
@@ -184,10 +194,65 @@ export async function svgToPng(svg, width) {
   return BACKENDS[name](svg, width);
 }
 
+/** Обработать список параллельно (не больше limit одновременно), сохраняя порядок результатов. */
+export async function mapLimit(list, limit, fn) {
+  const out = new Array(list.length);
+  let next = 0;
+  const lim = capabilities.png === 'browser' ? Math.min(limit, 3) : limit;
+  const worker = async () => { while (next < list.length) { const i = next++; out[i] = await fn(list[i], i); } };
+  await Promise.all(Array.from({ length: Math.min(lim, list.length) }, worker));
+  return out;
+}
+
+/** Увеличить RGBA-картинку без сглаживания до размера w×h. */
+export function upscaleNearest(img, w, h) {
+  const out = new Uint8Array(w * h * 4), sx = img.width / w, sy = img.height / h;
+  for (let y = 0; y < h; y++) {
+    const row = Math.min(img.height - 1, Math.floor((y + 0.5) * sy)) * img.width;
+    for (let x = 0; x < w; x++) {
+      const i = (row + Math.min(img.width - 1, Math.floor((x + 0.5) * sx))) * 4, o = (y * w + x) * 4;
+      out[o] = img.data[i]; out[o + 1] = img.data[i + 1]; out[o + 2] = img.data[i + 2]; out[o + 3] = img.data[i + 3];
+    }
+  }
+  return { width: w, height: h, data: out };
+}
+
+/**
+ * Кадр сцены в PNG с учётом пиксельного режима (scene.pixel), состояний и света.
+ * opts: width, viewBox, only, background, states, pixel (false — выключить), native (пиксельный кадр без увеличения),
+ *       lit (true или { ambient, normals }) — освещение источниками light по карте нормалей.
+ */
+export async function renderPNG(scene, t = 0, opts = {}) {
+  const vb = opts.viewBox || [0, 0, scene.width, scene.height];
+  const outW = Math.max(1, Math.round(opts.width ?? vb[2]));
+  const px = opts.pixel === false ? null : pixelOf(scene);
+  const base = { viewBox: opts.viewBox, only: opts.only, background: opts.background, states: opts.states };
+  const lowW = px ? Math.max(1, Math.round(vb[2] / px.size)) : outW;
+  const ro = { ...base, width: lowW, crisp: !!px && !px.aa };
+  let png;
+  if (opts.lit) {
+    const { sceneNormalMap, lightImage } = await import('./normals.mjs');
+    const L = typeof opts.lit === 'object' ? opts.lit : {};
+    const r = await sceneNormalMap(scene, { t, only: opts.only, viewBox: vb, width: lowW, settings: L.normals || {}, states: opts.states, crisp: ro.crisp });
+    const lights = collectLights(scene, t, { states: opts.states }).map((l) => ({ ...l, x: (l.x - vb[0]) * (lowW / vb[2]), y: (l.y - vb[1]) * (lowW / vb[2]), z: l.z * (lowW / vb[2]), radius: l.radius * (lowW / vb[2]) }));
+    const amb = parseColor(L.ambient || scene.ambient || '#4a4f5c');
+    const lit = lightImage(r.color, r.normal, lights, { ambient: amb.slice(0, 3) });
+    if (!px) return encodePNG(lit);
+    png = lit;
+  } else {
+    const buf = await svgToPng(renderSVG(scene, t, ro), lowW);
+    if (!px) return buf;
+    png = decodePNG(buf);
+  }
+  if (px.palette) quantizeRGBA(png.data, px.palette);
+  if (opts.native) return encodePNG(png);
+  return encodePNG(upscaleNearest(png, outW, Math.round((outW * vb[3]) / vb[2])));
+}
+
 export function frameSVG(scene, t, width) { return renderSVG(scene, t, { width }); }
 
 /** Контактный лист: сетка кадров в одном SVG (уникальные id для каждого кадра). */
-export function contactSheetSVG(scene, times, { cols, cellWidth = 480 } = {}) {
+export function contactSheetSVG(scene, times, { cols, cellWidth = 480, states } = {}) {
   cols = cols || Math.min(times.length, 4);
   const rows = Math.ceil(times.length / cols);
   const cw = cellWidth, ch = Math.round((cw * scene.height) / scene.width), lab = 26, gap = 8;
@@ -195,7 +260,7 @@ export function contactSheetSVG(scene, times, { cols, cellWidth = 480 } = {}) {
   let body = '';
   times.forEach((t, i) => {
     const x = gap + (i % cols) * (cw + gap), y = gap + Math.floor(i / cols) * (ch + lab + gap);
-    const tree = evaluate(scene, t, { idPrefix: `f${i}` });
+    const tree = evaluate(scene, t, { idPrefix: `f${i}`, states });
     tree.attrs.x = x; tree.attrs.y = y + lab; tree.attrs.width = cw; tree.attrs.height = ch;
     delete tree.attrs.xmlns;
     body += `<text x="${x + 4}" y="${y + 18}" font-family="monospace" font-size="15" fill="#ccc">t = ${t.toFixed(2)}s</text>${treeToString(tree)}`;
@@ -212,11 +277,11 @@ export async function exportVideo(scene, path, { fps = scene.fps || 30, width = 
   try {
     const n = Math.max(1, Math.round((end - start) * fps));
     const w = Math.round(width / 2) * 2;
-    for (let i = 0; i < n; i++) {
-      const png = await svgToPng(renderSVG(scene, start + i / fps, { width: w }), w);
+    await mapLimit(Array.from({ length: n }, (_, i) => i), PARALLEL, async (i) => {
+      const png = await renderPNG(scene, start + i / fps, { width: w });
       writeFileSync(join(dir, `f${String(i).padStart(5, '0')}.png`), png);
       if (onProgress && i % 30 === 0) onProgress(i, n);
-    }
+    });
     format = format || path.split('.').pop().toLowerCase();
     const inArgs = ['-y', '-framerate', String(fps), '-i', join(dir, 'f%05d.png')];
     if (format === 'gif') {
