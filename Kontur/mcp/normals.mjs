@@ -283,8 +283,28 @@ export async function sceneNormalMap(scene, { t = 0, only, viewBox, width, setti
   const n = hi.width * hi.height, H = new Float32Array(n), A = new Float32Array(n);
   for (let i = 0; i < n; i++) { H[i] = hi.data[i * 4] / 255; A[i] = Math.max(hi.data[i * 4 + 3], ci.data[i * 4 + 3]) / 255; }
   const nm = normalsFromHeight(H, only ? A : null, hi.width, hi.height, { ...st, detail: st.detail ? luminance(ci) : null, detailAmount: st.detail });
+  // 2.5D-сцены: явные нормали узлов с props.surface (проход normal) поверх нормалей из высот
+  if (st.source !== 'height' && hasSurfaces(scene)) {
+    const sp = normalMapFromPass(await svgToPng(renderSVG(scene, t, { ...opt, mode: 'normal' }), width), { yUp: st.yUp !== false });
+    if (sp.width === nm.width && sp.height === nm.height) for (let i = 0; i < sp.data.length; i += 4) if (sp.data[i + 3]) { nm.data[i] = sp.data[i]; nm.data[i + 1] = sp.data[i + 1]; nm.data[i + 2] = sp.data[i + 2]; nm.data[i + 3] = Math.max(nm.data[i + 3], ci.data[i + 3]); }
+  }
   return { normal: nm, color: ci, height: hi, settings: st };
 }
+
+/**
+ * Проход normal (мировые нормали узлов с props.surface) → карта нормалей 2D-движков:
+ * мир x вправо, y вверх, z от камеры → карта x, y (yUp), z к зрителю. Пиксели без поверхности — прозрачные.
+ */
+export function normalMapFromPass(png, { yUp = true } = {}) {
+  const im = Buffer.isBuffer(png) ? decodePNG(png) : png, d = im.data, out = new Uint8Array(d.length);
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 128) { out[i] = 128; out[i + 1] = 128; out[i + 2] = 255; out[i + 3] = 0; continue; }
+    const nx = d[i] / 127.5 - 1, ny = d[i + 1] / 127.5 - 1, nzv = -(d[i + 2] / 127.5 - 1);
+    out[i] = Math.round((nx * 0.5 + 0.5) * 255); out[i + 1] = Math.round(((yUp ? ny : -ny) * 0.5 + 0.5) * 255); out[i + 2] = Math.round((Math.max(0, nzv) * 0.5 + 0.5) * 255); out[i + 3] = 255;
+  }
+  return { width: im.width, height: im.height, data: out };
+}
+const hasSurfaces = (scene) => !!scene.camera3d || scene.nodes.some((n) => n.props?.surface);
 
 /** Карта нормалей для растрового файла (PNG/JPG/... — через растеризатор). */
 export async function imageNormalMap(buf, mime, settings = {}) {

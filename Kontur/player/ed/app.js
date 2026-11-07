@@ -49,7 +49,12 @@ toggleBtn('v-bones', 'showBones', () => emit('overlay'));
 toggleBtn('v-snap', 'snap');
 toggleBtn('v-pixel', 'pixelPreview', () => { emit('previewmode'); if (E.pixelPreview && !E.scene.pixel?.enabled) toast('Пиксельный режим сцены выключен — показан пиксель по умолчанию. Настройки: вкладка «Сцена»'); });
 toggleBtn('v-light', 'lightPreview', () => { emit('previewmode'); if (E.lightPreview && !E.scene.nodes.some((n) => n.type === 'light')) toast('В сцене нет источников света — поставьте их инструментом «Свет» (J)'); });
-on('previewmode', () => { $('v-pixel').classList.toggle('on', E.pixelPreview); $('v-light').classList.toggle('on', E.lightPreview); schedulePreview(); });
+toggleBtn('v-deferred', 'deferredPreview', () => {
+  if (E.deferredPreview && !E.live) { E.deferredPreview = false; toast('Отложенный свет считается сервером Kontur MCP — откройте студию через него (kontur-mcp / npm run preview)', true); }
+  else if (E.deferredPreview && !E.scene.camera3d) { E.deferredPreview = false; toast('Нужна 2.5D-сцена: камера camera3d и узлы с surface (инструменты camera3d_set и world_build)', true); }
+  emit('previewmode');
+});
+on('previewmode', () => { $('v-pixel').classList.toggle('on', E.pixelPreview); $('v-light').classList.toggle('on', E.lightPreview); $('v-deferred').classList.toggle('on', !!E.deferredPreview); schedulePreview(); });
 $('v-fit').onclick = fit;
 $('zoom').ondblclick = () => zoomTo(1);
 on('view-reset', () => { layout(); });

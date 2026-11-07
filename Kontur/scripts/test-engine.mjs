@@ -3,7 +3,9 @@
 import {
   createScene, ops, evaluate, renderSVG, treeToString, nodeWorldMatrix, mat, collectLights,
   diffScenes, applyEdits, editsEmpty, editsCount, quantizeRGBA, validateScene, invalidate, describeScene,
+  encodeNormal, encodePlaneD, resolveSurface, surfaceAxes,
 } from '../engine/kontur.js';
+import * as W3 from '../engine/world3d.js';
 
 let fails = 0, passed = 0;
 const ok = (cond, msg) => { if (cond) passed++; else { fails++; console.log('  ✗', msg); } };
@@ -161,6 +163,88 @@ section('пиксельный режим: палитра');
   ops.setPixel(s, { size: 4, palette: ['#000', '#fff'] });
   ok(describeScene(s).includes('кадр 80×45'), 'сводка: размер кадра в пикселях');
   ok(renderSVG(s, 0, { crisp: true }).includes('shape-rendering="crispEdges"'), 'crisp отключает сглаживание');
+}
+
+/* ---------- 2.5D: проходы отложенного света ---------- */
+section('2.5D: кодирование, наследование поверхности, проходы');
+{
+  ok(encodeNormal([0, 0, -1]) === '#8080' + '00' && encodeNormal([1, 0, 0]) === '#ff8080', 'нормаль → rgb((n·0.5+0.5)·255)');
+  const pd = encodePlaneD(-9, 0.5);
+  const q = Math.round((-9 + 200) * 100);
+  ok(pd === '#' + (q >> 8).toString(16).padStart(2, '0') + (q & 255).toString(16).padStart(2, '0') + '80', 'planeD: d в 16 бит (R,G), блик в B');
+  const wall = resolveSurface(null, { plane: [0, 0, -1, -9], spec: 0.3, base: true, emissive: '#ff0000' });
+  ok(wall.normal.join() === '0,0,-1' && wall.base && !wall.bump, 'грань: нормаль из плоскости, base');
+  const brick = resolveSurface(wall, { tilt: [1, 0, 1] });
+  ok(brick.plane[3] === -9 && brick.spec === 0.3 && brick.emissive === '#ff0000' && !brick.base && brick.bump, 'деталь наследует plane/spec/emissive, но не base; tilt делает её bump');
+  ok(brick.normal[0] > 0.5 && brick.normal[2] < -0.5, 'tilt наклоняет нормаль по оси u грани');
+  ok(resolveSurface(wall, false) === null && resolveSurface(null, undefined) === null, 'surface: false снимает поверхность');
+  const ax = surfaceAxes([0, 1, 0]);
+  ok(ax.u.join() === '1,0,0' && ax.v.join() === '0,0,1', 'оси пола: u = X, v = Z');
+
+  const s = createScene({ width: 200, height: 100, background: '#123456' });
+  s.nodes.push(
+    { id: 'face', type: 'group', props: { surface: { plane: [0, 0, -1, -5], base: true, spec: 0.2, emissive: '#00ff00' } } },
+    { id: 'body', type: 'rect', parent: 'face', props: { x: 0, y: 0, width: 200, height: 100, fill: '#aaaaaa', surface: { base: true } } },
+    { id: 'det', type: 'rect', parent: 'face', props: { x: 10, y: 10, width: 20, height: 20, fill: '#bbbbbb', surface: { tilt: [0, 1, 1] } } },
+    { id: 'thin', type: 'rect', parent: 'face', props: { x: 50, y: 10, width: 0.1, height: 20, fill: '#cccccc', surface: { base: true } } },
+    { id: 'chr', type: 'rect', props: { x: 120, y: 20, width: 30, height: 60, fill: '#dd0000', opacity: 0.5, surface: { tag: 'chr', normal: [0, 0, -1] } } },
+    { id: 'free', type: 'circle', props: { x: 180, y: 50, r: 8, fill: '#ffffff' } },
+    { id: 'blend', type: 'rect', props: { x: 0, y: 0, width: 50, height: 50, fill: '#ffffff', blend: 'screen' } },
+  );
+  const color = renderSVG(s, 0);
+  ok(color.includes('fill-opacity="0.5"') && !/<rect[^>]*\sopacity="0.5"/.test(color), 'одиночная фигура: fill-opacity вместо opacity (нет швов)');
+  ok(!color.includes('#cccccc'), 'вырожденная фигура (0.1 px) отбрасывается');
+  const nrm = renderSVG(s, 0, { mode: 'normal' });
+  ok(nrm.includes(encodeNormal([0, 0, -1])) && !nrm.includes('#123456') && !nrm.includes('#aaaaaa'), 'normal: цвета — нормали, фона нет');
+  ok(!nrm.includes('mix-blend-mode') && !/r="8"/.test(nrm), 'normal: узлы без поверхности и наложения не пишутся');
+  const pdS = renderSVG(s, 0, { mode: 'planeD' });
+  ok(pdS.includes(encodePlaneD(-5, 0.2)), 'planeD: d и блик грани');
+  const em = renderSVG(s, 0, { mode: 'emissive' });
+  ok(em.includes('#00ff00') && em.includes('#000000'), 'emissive: свечение грани на чёрном');
+  const mk = renderSVG(s, 0, { mode: 'mask:chr' });
+  ok(mk.includes('#ffffff') && mk.includes('#000000'), 'mask:chr: метка белым, тела чёрным');
+  const cov = renderSVG(s, 0, { mode: 'cover' });
+  ok(cov.includes('#ffffff'), 'cover: покрытие');
+  let threw = false; try { renderSVG(s, 0, { mode: 'bogus' }); } catch { threw = true; }
+  ok(threw, 'неизвестный режим — ошибка');
+}
+
+section('2.5D: world3d — камера, сборка мира, узлы');
+{
+  const cam = W3.camera({ hor: 200, f: 1000, camH: 2, dz: 0, cx: 500 }, 1000);
+  const p = cam.P([1, 0, 10]);
+  ok(near(p[0], 600) && near(p[1], 400), 'проекция P = [cx + f·X/(Z+dz), hor + f·(camH−Y)/(Z+dz)]');
+  const un = W3.unproject(cam, 600, 400, [0, 1, 0, 0]);
+  ok(un && near(un[0], 1) && near(un[2], 10) && near(un[1], 0), 'unproject на плоскость пола');
+  const fc = W3.fitCamera({ width: 1920, height: 1080, hor: 300, charPx: 260 });
+  ok(near(fc.camH, (1.7 * (1080 - 300)) / 260), 'fitCamera: camH = 1.7·(bottom−hor)/charPx');
+  const items = [
+    { type: 'ground', x: [-6, 6], z: [0, 20] },
+    { type: 'house', x: [-5, -1], z: [5, 9], h: 5, mat: 'brick', litP: 1 },
+    { type: 'box', x: [1, 2], y: [0, 1], z: [3, 4], mats: { front: ['wood'] } },
+    { type: 'lamp', X: 2, Z: 2.5 },
+    { type: 'cloud', x: 300, y: 80 },
+  ];
+  const a = W3.buildWorld({ width: 640, height: 360, camera3d: { hor: 120, f: 500, camH: 2.5, dz: 2 }, seed: 7, items });
+  const b = W3.buildWorld({ width: 640, height: 360, camera3d: { hor: 120, f: 500, camH: 2.5, dz: 2 }, seed: 7, items });
+  ok(!a.errors.length && JSON.stringify(a.S.items.map((i) => i.prims)) === JSON.stringify(b.S.items.map((i) => i.prims)), 'сборка детерминирована по seed');
+  const c = W3.buildWorld({ width: 640, height: 360, camera3d: { hor: 120, f: 500, camH: 2.5, dz: 2 }, seed: 8, items });
+  ok(JSON.stringify(a.S.items.map((i) => i.prims)) !== JSON.stringify(c.S.items.map((i) => i.prims)), 'другой seed — другие детали');
+  ok(a.S.lights.length >= 1 && a.S.occ.length >= 2, 'фонарь дал источник, коробки — окклюдеры');
+  const bad = W3.buildWorld({ width: 640, height: 360, items: [{ type: 'window' }, { type: 'zzz' }] });
+  ok(bad.errors.length === 2, 'ошибки объектов собираются, а не роняют сборку');
+  const r = W3.toNodes(a.S, { group: 'w', idPrefix: 'w_' });
+  const ids = new Set(r.nodes.map((n) => n.id));
+  ok(ids.size === r.nodes.length && r.nodes.every((n) => !n.parent || ids.has(n.parent)), 'узлы: уникальные id, родители на месте');
+  ok(r.nodes.some((n) => n.props?.occluder?.boxes?.length) && r.nodes.some((n) => n.type === 'light' && Array.isArray(n.props.p3)), 'узлы: окклюдеры и свет с p3');
+  ok(r.nodes.some((n) => n.props?.surface?.sky), 'небо помечено surface.sky');
+  const sc = { ...createScene({ width: 640, height: 360 }), camera3d: { hor: 120, f: 500, camH: 2.5, dz: 2, cx: 320 }, nodes: r.nodes };
+  ok(validateScene(sc).length === 0, 'сцена из мира проходит проверку');
+  const lights = collectLights(sc, 0), L = lights.find((l) => l.group === 'lamp');
+  const pp = W3.camera(sc.camera3d, 640).P(L.p3);
+  ok(L && near(L.x, pp[0], 0.01) && near(L.y, pp[1], 0.01) && L.radius3 > 0 && lights.some((l) => l.group === 'window'), 'свет с p3 проецируется камерой сцены, окна — группа window');
+  const nm = renderSVG(sc, 0, { mode: 'normal' });
+  ok(nm.length > 1000 && !nm.includes('NaN'), 'проход normal мира без NaN');
 }
 
 console.log(fails ? `\n✗ провалено ${fails}, прошло ${passed}` : `\n✓ все проверки прошли (${passed})`);
