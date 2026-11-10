@@ -182,7 +182,8 @@ export function commit(label = 'правка') {
     if (snap != null) loadInto(JSON.parse(snap));
     return false;
   }
-  if (snap != null) { undoStack.push({ label, snap }); if (undoStack.length > 200) undoStack.shift(); redoStack.length = 0; }
+  // со связью с сервером история одна — на сервере (правка уходит патчем и записывается там)
+  if (snap != null && !serverHistory()) { undoStack.push({ label, snap }); if (undoStack.length > 200) undoStack.shift(); redoStack.length = 0; }
   E.player?.draw();
   emit('scene');
   push(label);
@@ -191,17 +192,35 @@ export function commit(label = 'правка') {
 export function cancel() { if (pending != null) { const s = pending; pending = null; loadInto(JSON.parse(s)); } }
 /** Правка одной функцией: снимок → изменение → запись в историю. */
 export function edit(label, fn) { begin(); try { fn(); } catch (e) { cancel(); toast(e.message, true); return false; } return commit(label); }
+/** История на сервере: студия открыта через Kontur MCP и показывает его сцену. */
+export const serverHistory = () => !!(E.live && E.source === '__live');
+async function serverStep(kind) {
+  if (pushTimer) { clearTimeout(pushTimer); await doPush(); }
+  try {
+    const r = await fetch('/' + kind, { method: 'POST' });
+    if (!r.ok) return toast('Сервер: ' + (await r.text()).slice(0, 200), true);
+    const d = await r.json();
+    if (d.label == null) { E.history = d.history; emit('scene'); return toast(kind === 'undo' ? 'Нечего отменять' : 'Нечего возвращать'); }
+    const s = await (await fetch('/scene.json', { cache: 'no-store' })).json();
+    E.rev = s.rev; E.edits = s.edits || null; E.history = s.history; E.synced = structuredClone(s.scene);
+    loadInto(s.scene);
+    toast((kind === 'undo' ? 'Отменено: ' : 'Повторено: ') + d.label);
+  } catch { toast('Нет связи с сервером', true); }
+}
 export function undo() {
+  if (serverHistory()) return serverStep('undo');
   const h = undoStack.pop(); if (!h) return;
   redoStack.push({ label: h.label, snap: JSON.stringify(E.scene) });
   loadInto(JSON.parse(h.snap)); push('отмена: ' + h.label); toast('Отменено: ' + h.label);
 }
 export function redo() {
+  if (serverHistory()) return serverStep('redo');
   const h = redoStack.pop(); if (!h) return;
   undoStack.push({ label: h.label, snap: JSON.stringify(E.scene) });
   loadInto(JSON.parse(h.snap)); push(h.label); toast('Повторено: ' + h.label);
 }
-export const canUndo = () => undoStack.length > 0, canRedo = () => redoStack.length > 0;
+export const canUndo = () => (serverHistory() ? (E.history?.undo ?? 0) > 0 || pushTimer != null : undoStack.length > 0);
+export const canRedo = () => (serverHistory() ? (E.history?.redo ?? 0) > 0 && pushTimer == null : redoStack.length > 0);
 export function clearHistory() { undoStack.length = 0; redoStack.length = 0; }
 /** Заменить сцену (история не трогается): выбор сохраняется по id. */
 export function loadInto(s, { keepTime = true } = {}) {
@@ -214,7 +233,7 @@ export function loadInto(s, { keepTime = true } = {}) {
   emit('scene'); emit('sel');
 }
 /** Сцена изменилась извне (MCP): отменить можно и это. */
-export function remoteReplace(s) { undoStack.push({ label: 'изменение извне', snap: JSON.stringify(E.scene) }); redoStack.length = 0; loadInto(s); }
+export function remoteReplace(s) { if (!serverHistory()) { undoStack.push({ label: 'изменение извне', snap: JSON.stringify(E.scene) }); redoStack.length = 0; } loadInto(s); }
 
 let pushTimer = null, pushLabel = '';
 export const pushing = () => pushTimer != null || E.saving;
@@ -227,9 +246,16 @@ function push(label) {
 async function doPush() {
   pushTimer = null; E.saving = true; emit('live');
   try {
-    const r = await fetch('/scene.json?label=' + encodeURIComponent(pushLabel), { method: 'POST', body: JSON.stringify(E.scene) });
+    // патч от последней сцены, известной серверу (если её нет — вся сцена)
+    const sent = structuredClone(E.scene);
+    const r = E.synced
+      ? await fetch('/patch?label=' + encodeURIComponent(pushLabel), { method: 'POST', body: JSON.stringify({ rev: E.rev, edits: K.diffScenes(E.synced, sent) }) })
+      : await fetch('/scene.json?label=' + encodeURIComponent(pushLabel), { method: 'POST', body: JSON.stringify(sent) });
     if (!r.ok) toast('Сервер не принял правку: ' + (await r.text()).slice(0, 200), true);
-    else { const d = await r.json(); E.rev = d.rev; E.edits = d.edits || null; }
+    else {
+      const d = await r.json(); E.rev = d.rev; E.edits = d.edits || null; E.history = d.history; E.synced = sent;
+      if (d.warnings?.length) toast('Правка наложена с замечаниями: ' + d.warnings.slice(0, 2).join('; '), true);
+    }
   } catch { toast('Нет связи с сервером — правка пока только в браузере', true); }
   E.saving = false; emit('live'); emit('pushed');
 }

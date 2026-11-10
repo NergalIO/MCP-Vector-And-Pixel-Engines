@@ -1,0 +1,26 @@
+name: Kontur
+on:
+  push:
+    paths: ['Kontur/**', '.github/workflows/kontur.yml']
+  pull_request:
+    paths: ['Kontur/**', '.github/workflows/kontur.yml']
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [18, 20, 22]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: Kontur
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci --no-audit --no-fund || npm i --no-audit --no-fund
+      - run: npm run lint --if-present
+      - run: npm test
+      - run: npm run bench -- --ci

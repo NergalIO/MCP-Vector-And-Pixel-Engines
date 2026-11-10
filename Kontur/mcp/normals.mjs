@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 // Карты нормалей: PNG-кодек без зависимостей, карта высот → нормали, рельеф из альфы/яркости, превью освещения.
 import { inflateSync, deflateSync } from 'node:zlib';
 import { renderSVG } from '../engine/kontur.js';
-import { svgToPng } from './render.mjs';
+import { svgToRGBA } from './render.mjs';
 
 /* ============================== PNG ============================== */
 const CRC = (() => {
@@ -275,17 +277,17 @@ export const NORMAL_DEFAULTS = {
  * opts: { t, only, viewBox, width, settings }
  */
 export async function sceneNormalMap(scene, { t = 0, only, viewBox, width, settings = {}, states, crisp } = {}) {
+  scene = heightToNormalSrc(scene);
   const st = { ...NORMAL_DEFAULTS, ...(scene.relief || {}), ...settings };
   const relief = { height: st.height, depth: st.depth, bevel: st.bevel, profile: st.profile, luma: st.luma, background: st.background ?? 0 };
   const opt = { only, viewBox, width, background: only ? false : undefined, states, crisp };
-  const [hPng, cPng] = await Promise.all([svgToPng(renderSVG(scene, t, { ...opt, mode: 'height', relief }), width), svgToPng(renderSVG(scene, t, opt), width)]);
-  const hi = decodePNG(hPng), ci = decodePNG(cPng);
+  const [hi, ci] = await Promise.all([svgToRGBA(renderSVG(scene, t, { ...opt, mode: 'height', relief }), width), svgToRGBA(renderSVG(scene, t, opt), width)]);
   const n = hi.width * hi.height, H = new Float32Array(n), A = new Float32Array(n);
   for (let i = 0; i < n; i++) { H[i] = hi.data[i * 4] / 255; A[i] = Math.max(hi.data[i * 4 + 3], ci.data[i * 4 + 3]) / 255; }
   const nm = normalsFromHeight(H, only ? A : null, hi.width, hi.height, { ...st, detail: st.detail ? luminance(ci) : null, detailAmount: st.detail });
   // 2.5D-сцены: явные нормали узлов с props.surface (проход normal) поверх нормалей из высот
   if (st.source !== 'height' && hasSurfaces(scene)) {
-    const sp = normalMapFromPass(await svgToPng(renderSVG(scene, t, { ...opt, mode: 'normal' }), width), { yUp: st.yUp !== false });
+    const sp = normalMapFromPass(await svgToRGBA(renderSVG(scene, t, { ...opt, mode: 'normal' }), width), { yUp: st.yUp !== false });
     if (sp.width === nm.width && sp.height === nm.height) for (let i = 0; i < sp.data.length; i += 4) if (sp.data[i + 3]) { nm.data[i] = sp.data[i]; nm.data[i + 1] = sp.data[i + 1]; nm.data[i + 2] = sp.data[i + 2]; nm.data[i + 3] = Math.max(nm.data[i + 3], ci.data[i + 3]); }
   }
   return { normal: nm, color: ci, height: hi, settings: st };
@@ -315,7 +317,7 @@ export async function imageNormalMap(buf, mime, settings = {}) {
     const { imageSize } = await import('./render.mjs');
     const sz = imageSize(buf) || { width: 512, height: 512 };
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${sz.width}" height="${sz.height}"><image width="${sz.width}" height="${sz.height}" href="data:${mime};base64,${buf.toString('base64')}" xlink:href="data:${mime};base64,${buf.toString('base64')}"/></svg>`;
-    img = decodePNG(await svgToPng(svg, sz.width));
+    img = await svgToRGBA(svg, sz.width);
   }
   const { H, alpha, w, h } = heightFromImage(img, { bevel: st.bevel, profile: st.profile, depth: st.depth, base: st.base, luma: st.luma, invertLuma: st.invertLuma, lumaBlur: st.lumaBlur });
   const hasAlpha = alpha.some((a) => a < 0.98);
@@ -323,4 +325,33 @@ export async function imageNormalMap(buf, mime, settings = {}) {
   const hv = new Uint8Array(w * h * 4);
   for (let i = 0; i < w * h; i++) { const v = Math.round(Math.min(1, Math.max(0, H[i])) * 255); hv[i * 4] = hv[i * 4 + 1] = hv[i * 4 + 2] = v; hv[i * 4 + 3] = 255; }
   return { normal: nm, color: img, height: { width: w, height: h, data: hv }, settings: st };
+}
+
+/* ---------- heightSrc → normalSrc (этап 3) ---------- */
+const hnCache = new Map();
+/**
+ * Узлы-картинки с props.heightSrc (карта высот, PNG: data: URI или путь от baseDir) и без normalSrc получают
+ * normalSrc — касательную карту нормалей (зелёный вверх), посчитанную Собелем по яркости (props.heightStrength, 3).
+ * Результат кэшируется по источнику и силе. Сцена не меняется — возвращается копия.
+ */
+export function heightToNormalSrc(scene, baseDir) {
+  if (!scene?.nodes?.some((n) => n.props?.heightSrc && !n.props.normalSrc)) return scene;
+  return { ...scene, nodes: scene.nodes.map((n) => {
+    const p = n.props;
+    if (!p?.heightSrc || p.normalSrc) return n;
+    const strength = p.heightStrength ?? 3, key = `${strength}|${p.heightSrc}`;
+    let uri = hnCache.get(key);
+    if (uri === undefined) {
+      uri = null;
+      try {
+        const src = String(p.heightSrc);
+        const buf = src.startsWith('data:') ? Buffer.from(src.slice(src.indexOf(',') + 1), 'base64') : readFileSync(resolvePath(baseDir || '.', src));
+        const im = decodePNG(buf), m = im.width * im.height, H = new Float32Array(m), A = new Float32Array(m);
+        for (let i = 0; i < m; i++) { const o = i * 4; H[i] = (0.299 * im.data[o] + 0.587 * im.data[o + 1] + 0.114 * im.data[o + 2]) / 255; A[i] = im.data[o + 3] / 255; }
+        uri = 'data:image/png;base64,' + encodePNG(normalsFromHeight(H, A, im.width, im.height, { strength, blur: 1, yUp: true })).toString('base64');
+      } catch { uri = null; }
+      hnCache.set(key, uri);
+    }
+    return uri ? { ...n, props: { ...p, normalSrc: uri, normalYUp: true } } : n;
+  }) };
 }

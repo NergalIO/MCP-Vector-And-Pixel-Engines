@@ -1,9 +1,9 @@
-// Автотесты ядра: node scripts/test-engine.mjs
+// Автотесты ядра: node test/engine.test.mjs
 // IK, состояния, правки поверх сцены (edits), свет, палитра, кэш статичных частей, матрицы.
 import {
   createScene, ops, evaluate, renderSVG, treeToString, nodeWorldMatrix, mat, collectLights,
   diffScenes, applyEdits, editsEmpty, editsCount, quantizeRGBA, validateScene, invalidate, describeScene,
-  encodeNormal, encodePlaneD, resolveSurface, surfaceAxes,
+  encodeNormal, encodePlaneD, resolveSurface, surfaceAxes, encodeMatId, materialIndex, cameraModel,
 } from '../engine/kontur.js';
 import * as W3 from '../engine/world3d.js';
 
@@ -245,6 +245,85 @@ section('2.5D: world3d — камера, сборка мира, узлы');
   ok(L && near(L.x, pp[0], 0.01) && near(L.y, pp[1], 0.01) && L.radius3 > 0 && lights.some((l) => l.group === 'window'), 'свет с p3 проецируется камерой сцены, окна — группа window');
   const nm = renderSVG(sc, 0, { mode: 'normal' });
   ok(nm.length > 1000 && !nm.includes('NaN'), 'проход normal мира без NaN');
+}
+
+/* ---------- этапы roadmap 2.5D: гладкие нормали, материалы, BVH, камера ---------- */
+section('2.5D: normalGrad, lathe, matId, BVH, cameraModel');
+{
+  const { probeRaster, svgToPng, canPng } = await import('../mcp/render.mjs');
+  const { decodePNG } = await import('../mcp/normals.mjs');
+  const { buildBVH, bruteOccluded } = await import('../mcp/bvh.mjs');
+  await probeRaster();
+  const angle = (a, b) => { const la = Math.hypot(...a), lb = Math.hypot(...b); return (Math.acos(Math.max(-1, Math.min(1, (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (la * lb)))) * 180) / Math.PI; };
+  const dec = (im, x, y) => { const o = (y * im.width + x) * 4; return [im.data[o] / 127.5 - 1, im.data[o + 1] / 127.5 - 1, im.data[o + 2] / 127.5 - 1]; };
+
+  if (canPng()) {
+    // сфера градиентом нормали: декодированная нормаль в каждой точке ≤ 2° от аналитической
+    const s = createScene({ width: 256, height: 256 });
+    ops.addNode(s, { id: 'b', type: 'ellipse', props: { x: 128, y: 128, rx: 100, ry: 100, fill: '#ffffff', surface: { plane: [0, 0, -1, -5], base: true, normalGrad: { kind: 'sphere', c: [0, 0], r: 100 } } } });
+    const im = decodePNG(await svgToPng(renderSVG(s, 0, { mode: 'normal' }), 256));
+    let worst = 0, cnt = 0;
+    for (let y = -90; y <= 90; y += 5) for (let x = -90; x <= 90; x += 5) {
+      const dx = (x + 0.5) / 100, dy = (y + 0.5) / 100, r2 = dx * dx + dy * dy;
+      if (r2 > 0.81) continue;
+      const n = dec(im, 128 + x, 128 + y);
+      worst = Math.max(worst, angle(n, [dx, -dy, -Math.sqrt(1 - r2)])); cnt++;
+    }
+    ok(cnt > 900 && worst <= 2, `normalGrad сферы: худшая ошибка ${worst.toFixed(2)}° (≤ 2°) на ${cnt} точках`);
+
+    // тело вращения (cyl → lathe): нормаль поперёк цилиндра гладкая и совпадает с аналитической
+    const cam = { hor: 100, f: 400, camH: 1, dz: 2 };
+    const wb = W3.buildWorld({ width: 400, height: 300, camera3d: cam, seed: 1, items: [{ type: 'cyl', X: 0, Z: 4, r: 1, y: [0, 2], color: '#c0a080', n: 24 }] });
+    const sc = W3.toScene(wb.S, {});
+    const ni = decodePNG(await svgToPng(renderSVG(sc, 0, { mode: 'normal' }), 400));
+    const C = W3.camera(sc.camera3d, 400);
+    let wl = 0;
+    for (const a of [-0.8, -0.5, -0.2, 0, 0.3, 0.6, 0.8]) {
+      const p = [a, 1, 4 - Math.sqrt(1 - a * a)], [px, py] = C.P(p);
+      const v = [p[0] - C.pos[0], p[1] - C.pos[1], p[2] - C.pos[2]];
+      // нормаль поверхности цилиндра; в точке силуэта её проекция на луч зрения меняет оценку — берём видимые точки
+      if (v[0] * a + v[2] * (p[2] - 4) > 0) continue;
+      wl = Math.max(wl, angle(dec(ni, Math.floor(px), Math.floor(py)), [a, 0, p[2] - 4]));
+    }
+    ok(wl <= 4, `lathe: нормаль цилиндра гладкая, худшая ошибка ${wl.toFixed(2)}° (≤ 4°)`);
+
+    // проход matId: номер материала по scene.materials в R·256 + G
+    const sm = { ...createScene({ width: 64, height: 64 }), materials: { a: { noise: {} }, b: { grime: {} } } };
+    ops.addNode(sm, { id: 'r', type: 'rect', props: { x: 32, y: 32, width: 64, height: 64, fill: '#808080', surface: { plane: [0, 1, 0, 0], base: true, mat: 'b' } } });
+    const mi = decodePNG(await svgToPng(renderSVG(sm, 0, { mode: 'matId' }), 64));
+    const o = (32 * 64 + 32) * 4;
+    ok(((mi.data[o] << 8) | mi.data[o + 1]) === 2 && mi.data[o + 3] === 255, 'matId: материал b → номер 2');
+  }
+  ok(encodeMatId(1) === '#000100' && encodeMatId(258) === '#010200' && materialIndex({ materials: { x: {}, y: {} } }).get('y') === 2, 'encodeMatId / materialIndex');
+
+  // BVH против перебора: 10 000 лучей, треугольники с коробками
+  let sd = 11;
+  const rnd = () => ((sd = (sd * 16807) % 2147483647) / 2147483647);
+  const tris = [], boxes = [];
+  for (let i = 0; i < 1500; i++) { const c = [rnd() * 20 - 10, rnd() * 6, rnd() * 20]; tris.push([0, 1, 2].map(() => [c[0] + rnd() - 0.5, c[1] + rnd() - 0.5, c[2] + rnd() - 0.5])); }
+  for (let i = 0; i < 60; i++) { const x = rnd() * 20 - 10, y = rnd() * 4, z = rnd() * 20; boxes.push([x, x + rnd() * 1.5, y, y + rnd() * 1.5, z, z + rnd() * 1.5]); }
+  const bvh = buildBVH({ boxes, tris });
+  let mism = 0, hits = 0;
+  for (let i = 0; i < 10000; i++) {
+    const o = [rnd() * 24 - 12, rnd() * 6, rnd() * 24 - 2];
+    let d = [rnd() - 0.5, rnd() - 0.3, rnd() - 0.5]; const l = Math.hypot(...d); d = d.map((v) => v / l);
+    const tm = rnd() < 0.3 ? 2 + rnd() * 5 : 1e9;
+    const a = bvh.occluded(...o, ...d, tm), b = bruteOccluded({ boxes, tris }, ...o, ...d, tm);
+    if (a !== b) mism++; if (b) hits++;
+  }
+  ok(mism === 0 && hits > 1000, `BVH = перебор на 10 000 лучах (попаданий ${hits}, расхождений ${mism})`);
+  const tc = bvh.closest(0, 3, -50, 0, 0, 1);
+  ok(tc === Infinity || tc > 0, 'BVH closest: расстояние до ближайшего попадания');
+
+  // камера: без поворота — прежняя формула; с поворотом — луч и проекция согласованы; keepVerticals — вертикали вертикальны
+  const c0 = cameraModel({ hor: 200, f: 900, camH: 3, dz: 2 }, 1280);
+  const p0 = [1.3, 0.7, 6];
+  ok(c0.plain && near(c0.P(p0)[0], 640 + (900 * 1.3) / 8) && near(c0.P(p0)[1], 200 + (900 * 2.3) / 8), 'cameraModel без поворота = формула P(X,Y,Z)');
+  const c1 = cameraModel({ hor: 200, f: 900, camH: 3, dz: 2, yaw: 12, pitch: -8 }, 1280);
+  const rr = c1.ray(400, 300), q = c1.P([c1.pos[0] + rr[0] * 5, c1.pos[1] + rr[1] * 5, c1.pos[2] + rr[2] * 5]);
+  ok(!c1.plain && near(q[0], 400, 1e-6) && near(q[1], 300, 1e-6), 'cameraModel с yaw/pitch: P(луч(x, y)) = (x, y)');
+  const c2 = cameraModel({ hor: 200, f: 900, camH: 3, dz: 2, yaw: 15, pitch: 10, keepVerticals: true }, 1280);
+  ok(near(c2.P([2, 0, 7])[0], c2.P([2, 5, 7])[0], 1e-6) && c2.horEff > 200, 'keepVerticals: вертикаль остаётся вертикалью, горизонт сдвинут');
 }
 
 console.log(fails ? `\n✗ провалено ${fails}, прошло ${passed}` : `\n✓ все проверки прошли (${passed})`);

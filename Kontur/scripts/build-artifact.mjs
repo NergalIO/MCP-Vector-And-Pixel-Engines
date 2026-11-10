@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inlineAssets } from '../mcp/render.mjs';
+import { bundleEngine } from '../mcp/bundle.mjs';
 /** Имена из строки «export const a = …, b = …» (запятые внутри скобок и строк не считаются). */
 function declNames(line) {
   const out = [], body = line.replace(/^export (?:const|let) /, '');
@@ -33,9 +34,8 @@ const out = process.argv[2] || 'dist/kontur-studio.html';
 const read = (p) => readFileSync(new URL(p, root), 'utf8').replace(/\r\n/g, '\n');
 
 // Движок: обычный модуль, все экспорты — в window.Kontur (редактор берёт их оттуда).
-let engine = read('engine/kontur.js');
-const names = exportNames(engine);
-engine = engine.replace(/^export /gm, '') + `\nwindow.Kontur = { ${names.join(', ')} };\n`;
+// Исходники — engine/core/*.js; mcp/bundle.mjs склеивает их в один модуль.
+const engine = bundleEngine({ asWindowGlobal: true });
 
 // Редактор: модули player/ed/*.js по порядку зависимостей, каждый — в своей асинхронной обёртке,
 // импорты превращаются в разбор объекта модуля (имена верхнего уровня в разных модулях пересекаются).

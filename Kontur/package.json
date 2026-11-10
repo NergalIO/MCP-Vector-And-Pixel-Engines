@@ -12,8 +12,14 @@
     "mcp": "node mcp/server.mjs",
     "preview": "node mcp/server.mjs --preview --scene examples/flow.json",
     "demos": "node examples/build-demos.mjs",
-    "test": "node scripts/test-engine.mjs && node scripts/test-mcp.mjs && node scripts/test-edits.mjs && node scripts/test-editor.mjs",
-    "build:page": "node scripts/build-artifact.mjs dist/kontur-studio.html"
+    "test": "node test/run.mjs",
+    "build:page": "node scripts/build-artifact.mjs dist/kontur-studio.html",
+    "test:golden": "node test/golden.mjs",
+    "golden:update": "node test/golden.mjs --update",
+    "bench": "node test/bench.mjs",
+    "build:engine": "node mcp/bundle.mjs dist/kontur.js",
+    "docs": "node scripts/gen-docs.mjs",
+    "docs:check": "node scripts/gen-docs.mjs --check"
   },
   "engines": {
     "node": ">=18"

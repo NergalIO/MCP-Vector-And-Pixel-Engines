@@ -1,0 +1,2942 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://kontur.local/scene.schema.json",
+ "title": "Kontur scene",
+ "type": "object",
+ "required": [
+  "width",
+  "height",
+  "duration",
+  "nodes"
+ ],
+ "properties": {
+  "version": {
+   "type": "integer",
+   "maximum": 1
+  },
+  "width": {
+   "type": "number",
+   "exclusiveMinimum": 0
+  },
+  "height": {
+   "type": "number",
+   "exclusiveMinimum": 0
+  },
+  "duration": {
+   "type": "number",
+   "exclusiveMinimum": 0
+  },
+  "fps": {
+   "type": "number"
+  },
+  "background": {},
+  "loop": {
+   "type": "boolean"
+  },
+  "clips": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "name",
+     "start",
+     "end"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "start": {
+      "type": "number"
+     },
+     "end": {
+      "type": "number"
+     },
+     "loop": {
+      "type": "boolean"
+     },
+     "fps": {
+      "type": "number"
+     },
+     "next": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "markers": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "t",
+     "name"
+    ],
+    "properties": {
+     "t": {
+      "type": "number"
+     },
+     "name": {
+      "type": "string"
+     },
+     "data": {}
+    }
+   }
+  },
+  "symbols": {
+   "type": "object",
+   "description": "определения символов: имя → { nodes, duration? }",
+   "additionalProperties": {
+    "type": "object",
+    "required": [
+     "nodes"
+    ],
+    "properties": {
+     "nodes": {
+      "type": "array",
+      "items": {
+       "$ref": "#/$defs/node"
+      }
+     },
+     "duration": {
+      "type": "number"
+     }
+    }
+   }
+  },
+  "states": {
+   "type": "array"
+  },
+  "pixel": {},
+  "dither": {},
+  "relief": {},
+  "camera3d": {},
+  "lighting": {},
+  "style": {},
+  "materials": {
+   "type": "object"
+  },
+  "nodes": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/node"
+   }
+  }
+ },
+ "$defs": {
+  "key": {
+   "type": "object",
+   "required": [
+    "t",
+    "v"
+   ],
+   "properties": {
+    "t": {
+     "type": "number"
+    },
+    "v": {},
+    "ease": {
+     "description": "имя (linear, hold, inSine, outSine, inOutSine, inQuad, outQuad, inOutQuad, inCubic, outCubic, inOutCubic, inQuart, outQuart, inOutQuart, inQuint, outQuint, inOutQuint, inExpo, outExpo, inOutExpo, inCirc, outCirc, inOutCirc, inBack, outBack, inOutBack, inElastic, outElastic, inOutElastic, inBounce, outBounce, inOutBounce, ease, ease-in, ease-out, ease-in-out, smooth, snappy, anticipate), \"cubic-bezier(a,b,c,d)\", [a,b,c,d], \"spring(k,d,m)\", {spring:{…}}, {steps:n}"
+    },
+    "hold": {
+     "type": "boolean"
+    }
+   }
+  },
+  "mod": {
+   "oneOf": [
+    {
+     "type": "object",
+     "required": [
+      "type"
+     ],
+     "description": "Плавный шум: v += amp·fbm(t·freq). Параметры: prop|props, amp, freq, seed, octaves, perCopy (сдвиг сида для копий repeat).",
+     "properties": {
+      "type": {
+       "const": "wiggle"
+      },
+      "start": {
+       "type": "number"
+      },
+      "end": {
+       "type": "number"
+      },
+      "fadeIn": {
+       "type": "number"
+      },
+      "fadeOut": {
+       "type": "number"
+      },
+      "weight": {
+       "type": "number"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "prop": {
+       "type": "string",
+       "description": "свойство"
+      },
+      "props": {
+       "type": "array",
+       "description": "несколько свойств"
+      },
+      "amp": {
+       "type": [
+        "number",
+        "array"
+       ],
+       "default": 10,
+       "description": "размах (на свойство — массив)"
+      },
+      "freq": {
+       "type": "number",
+       "default": 1,
+       "description": "частота"
+      },
+      "seed": {
+       "type": "number",
+       "default": 0
+      },
+      "octaves": {
+       "type": "number",
+       "default": 2
+      },
+      "perCopy": {
+       "type": "number",
+       "default": 17,
+       "description": "сдвиг сида на копию repeat"
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "type"
+     ],
+     "description": "Периодические колебания: v += amp·wave(2π·freq·t + phase). wave: sine|triangle|saw|square. Параметры: prop|props, amp, freq, phase (градусы), wave, phaseStep (сдвиг фазы на копию).",
+     "properties": {
+      "type": {
+       "const": "oscillate"
+      },
+      "start": {
+       "type": "number"
+      },
+      "end": {
+       "type": "number"
+      },
+      "fadeIn": {
+       "type": "number"
+      },
+      "fadeOut": {
+       "type": "number"
+      },
+      "weight": {
+       "type": "number"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "prop": {
+       "type": "string",
+       "description": "свойство"
+      },
+      "props": {
+       "type": "array",
+       "description": "несколько свойств"
+      },
+      "amp": {
+       "type": [
+        "number",
+        "array"
+       ],
+       "default": 10
+      },
+      "freq": {
+       "type": "number",
+       "default": 1
+      },
+      "phase": {
+       "type": "number",
+       "default": 0,
+       "description": "градусы"
+      },
+      "wave": {
+       "type": "string",
+       "default": "sine",
+       "enum": [
+        "sine",
+        "triangle",
+        "saw",
+        "square"
+       ]
+      },
+      "phaseStep": {
+       "type": "number",
+       "default": 0,
+       "description": "сдвиг фазы на копию"
+      },
+      "propPhase": {
+       "type": "number",
+       "default": 0
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "type"
+     ],
+     "description": "Движение по эллипсу. Параметры: cx, cy, radius, radiusY, speed (оборотов/сек), phase (градусы), phaseStep, additive (true — прибавлять к x/y).",
+     "properties": {
+      "type": {
+       "const": "orbit"
+      },
+      "start": {
+       "type": "number"
+      },
+      "end": {
+       "type": "number"
+      },
+      "fadeIn": {
+       "type": "number"
+      },
+      "fadeOut": {
+       "type": "number"
+      },
+      "weight": {
+       "type": "number"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "cx": {
+       "type": "number",
+       "default": 0
+      },
+      "cy": {
+       "type": "number",
+       "default": 0
+      },
+      "radius": {
+       "type": "number",
+       "default": 100
+      },
+      "radiusY": {
+       "type": "number"
+      },
+      "speed": {
+       "type": "number",
+       "default": 0.25,
+       "description": "оборотов/с"
+      },
+      "phase": {
+       "type": "number",
+       "default": 0
+      },
+      "phaseStep": {
+       "type": "number",
+       "default": 0
+      },
+      "additive": {
+       "type": "boolean",
+       "default": false
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "type"
+     ],
+     "description": "Постоянное вращение: rotation += speed·t (градусы/сек).",
+     "properties": {
+      "type": {
+       "const": "spin"
+      },
+      "start": {
+       "type": "number"
+      },
+      "end": {
+       "type": "number"
+      },
+      "fadeIn": {
+       "type": "number"
+      },
+      "fadeOut": {
+       "type": "number"
+      },
+      "weight": {
+       "type": "number"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "speed": {
+       "type": "number",
+       "default": 90,
+       "description": "градусы/с"
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "type"
+     ],
+     "description": "Движение вдоль пути. Параметры: path (d, фигура или id узла-пути), progress (число 0..1; по умолчанию берётся свойство pathProgress), speed (циклов/сек, если progress не задан и pathProgress не анимирован), orient, offset (сдвиг доли), loop.",
+     "properties": {
+      "type": {
+       "const": "followPath"
+      },
+      "start": {
+       "type": "number"
+      },
+      "end": {
+       "type": "number"
+      },
+      "fadeIn": {
+       "type": "number"
+      },
+      "fadeOut": {
+       "type": "number"
+      },
+      "weight": {
+       "type": "number"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "path": {
+       "description": "d, фигура или id узла-пути"
+      },
+      "progress": {
+       "type": "number"
+      },
+      "speed": {
+       "type": "number",
+       "default": 0.2
+      },
+      "orient": {
+       "type": "boolean",
+       "default": false
+      },
+      "offset": {
+       "type": "number",
+       "default": 0
+      },
+      "offsetStep": {
+       "type": "number",
+       "default": 0
+      },
+      "loop": {
+       "type": "boolean",
+       "default": true
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "type"
+     ],
+     "description": "Физическая пружина: значение «догоняет» целевое (ключи + предыдущие модификаторы) с инерцией. Параметры: prop|props, stiffness, damping, mass.",
+     "properties": {
+      "type": {
+       "const": "spring"
+      },
+      "start": {
+       "type": "number"
+      },
+      "end": {
+       "type": "number"
+      },
+      "fadeIn": {
+       "type": "number"
+      },
+      "fadeOut": {
+       "type": "number"
+      },
+      "weight": {
+       "type": "number"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "prop": {
+       "type": "string",
+       "description": "свойство"
+      },
+      "props": {
+       "type": "array",
+       "description": "несколько свойств"
+      },
+      "stiffness": {
+       "type": "number",
+       "default": 120
+      },
+      "damping": {
+       "type": "number",
+       "default": 12
+      },
+      "mass": {
+       "type": "number",
+       "default": 1
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "type"
+     ],
+     "description": "Органическая деформация контура шумом. Параметры: amount (px), scale (пространственная частота), speed, seed, detail (мин. число сегментов).",
+     "properties": {
+      "type": {
+       "const": "deform"
+      },
+      "start": {
+       "type": "number"
+      },
+      "end": {
+       "type": "number"
+      },
+      "fadeIn": {
+       "type": "number"
+      },
+      "fadeOut": {
+       "type": "number"
+      },
+      "weight": {
+       "type": "number"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "amount": {
+       "type": "number",
+       "default": 10,
+       "description": "px"
+      },
+      "scale": {
+       "type": "number",
+       "default": 0.01
+      },
+      "speed": {
+       "type": "number",
+       "default": 0.5
+      },
+      "seed": {
+       "type": "number",
+       "default": 0
+      },
+      "detail": {
+       "type": "number",
+       "default": 0,
+       "description": "мин. число сегментов"
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "type"
+     ],
+     "description": "Связь со свойством другого узла: v = src·mul + add (или v += …, если additive). Параметры: prop, source (id), sourceProp, mul, add, delay (сек), additive.",
+     "properties": {
+      "type": {
+       "const": "link"
+      },
+      "start": {
+       "type": "number"
+      },
+      "end": {
+       "type": "number"
+      },
+      "fadeIn": {
+       "type": "number"
+      },
+      "fadeOut": {
+       "type": "number"
+      },
+      "weight": {
+       "type": "number"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "prop": {
+       "type": "string"
+      },
+      "source": {
+       "type": "string",
+       "description": "id узла"
+      },
+      "sourceProp": {
+       "type": "string"
+      },
+      "mul": {
+       "type": "number",
+       "default": 1
+      },
+      "add": {
+       "type": "number",
+       "default": 0
+      },
+      "delay": {
+       "type": "number",
+       "default": 0,
+       "description": "сек"
+      },
+      "additive": {
+       "type": "boolean",
+       "default": false
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "type"
+     ],
+     "description": "Плавное «плавание» оттенка. Параметры: prop, amount (0..1), speed, seed.",
+     "properties": {
+      "type": {
+       "const": "noiseColor"
+      },
+      "start": {
+       "type": "number"
+      },
+      "end": {
+       "type": "number"
+      },
+      "fadeIn": {
+       "type": "number"
+      },
+      "fadeOut": {
+       "type": "number"
+      },
+      "weight": {
+       "type": "number"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "prop": {
+       "type": "string",
+       "default": "fill"
+      },
+      "amount": {
+       "type": "number",
+       "default": 0.15,
+       "description": "0..1"
+      },
+      "speed": {
+       "type": "number",
+       "default": 0.3
+      },
+      "seed": {
+       "type": "number",
+       "default": 3
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "type"
+     ],
+     "description": "Выражение: тело функции (t, v, n, i, ctx) → новое значение. i — индекс копии, ctx — {noise1, noise3, fbm, lerp, clamp, ease(name, u), scene, prop}. Безопасное подмножество JS (const/let, if/else, return, арифметика, тернарный, Math.*); код вне подмножества исполняется как JS только при KONTUR_TRUST_EXPR=1 (в браузере — всегда). Пример: \"return v + Math.sin(t*3 + i)*20\".",
+     "properties": {
+      "type": {
+       "const": "expr"
+      },
+      "start": {
+       "type": "number"
+      },
+      "end": {
+       "type": "number"
+      },
+      "fadeIn": {
+       "type": "number"
+      },
+      "fadeOut": {
+       "type": "number"
+      },
+      "weight": {
+       "type": "number"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "prop": {
+       "type": "string",
+       "description": "свойство"
+      },
+      "props": {
+       "type": "array",
+       "description": "несколько свойств"
+      },
+      "code": {
+       "type": "string",
+       "description": "тело функции (t, v, n, i, ctx)"
+      }
+     }
+    }
+   ]
+  },
+  "node": {
+   "oneOf": [
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "контейнер, дети наследуют трансформацию и время",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "group"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "bone": {
+         "type": "boolean",
+         "default": false,
+         "description": "кость скелета"
+        },
+        "ik": {
+         "description": "двухзвенный IK"
+        },
+        "time": {
+         "description": "смещение/масштаб времени"
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "центр в (x, y)",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "rect"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "width": {
+         "type": "number",
+         "default": 100
+        },
+        "height": {
+         "type": "number",
+         "default": 100
+        },
+        "radius": {
+         "type": "number",
+         "default": 0
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "ellipse",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "ellipse"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "rx": {
+         "type": "number",
+         "default": 50
+        },
+        "ry": {
+         "type": "number",
+         "default": 50
+        },
+        "r": {
+         "type": "number",
+         "description": "радиус (вместо rx, ry)"
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "circle",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "circle"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "r": {
+         "type": "number",
+         "description": "радиус"
+        },
+        "rx": {
+         "type": "number",
+         "default": 50
+        },
+        "ry": {
+         "type": "number",
+         "default": 50
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "polygon",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "polygon"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "sides": {
+         "type": "number",
+         "default": 6
+        },
+        "radius": {
+         "type": "number",
+         "default": 50
+        },
+        "cornerRadius": {
+         "type": "number",
+         "default": 0
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "star",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "star"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "points": {
+         "type": "number",
+         "default": 5
+        },
+        "outerRadius": {
+         "type": "number",
+         "default": 50
+        },
+        "innerRadius": {
+         "type": "number",
+         "default": 22
+        },
+        "cornerRadius": {
+         "type": "number",
+         "default": 0
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "path",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "path"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "d": {
+         "description": "SVG path / описание фигуры"
+        },
+        "points": {
+         "description": "[[x,y],…]"
+        },
+        "smooth": {
+         "type": "number"
+        },
+        "closed": {
+         "type": "boolean"
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "обводка по умолчанию белая",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "line"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "x1": {
+         "type": "number",
+         "default": 0
+        },
+        "y1": {
+         "type": "number",
+         "default": 0
+        },
+        "x2": {
+         "type": "number",
+         "default": 100
+        },
+        "y2": {
+         "type": "number",
+         "default": 0
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "«живая» органическая клякса — анимируется сама",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "blob"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "radius": {
+         "type": "number",
+         "default": 80
+        },
+        "points": {
+         "type": "number",
+         "default": 8
+        },
+        "amount": {
+         "type": "number",
+         "default": 0.25
+        },
+        "frequency": {
+         "type": "number",
+         "default": 1.2
+        },
+        "speed": {
+         "type": "number",
+         "default": 0.5
+        },
+        "seed": {
+         "type": "number",
+         "default": 1
+        },
+        "tension": {
+         "type": "number",
+         "default": 1
+        },
+        "stretchX": {
+         "type": "number",
+         "default": 1
+        },
+        "stretchY": {
+         "type": "number",
+         "default": 1
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "text",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "text"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "text": {
+         "type": "string",
+         "default": ""
+        },
+        "fontSize": {
+         "type": "number",
+         "default": 48
+        },
+        "fontFamily": {
+         "type": "string"
+        },
+        "fontWeight": {
+         "type": "number",
+         "default": 600
+        },
+        "textAlign": {
+         "type": "string",
+         "default": "center"
+        },
+        "letterSpacing": {
+         "type": "number",
+         "default": 0
+        },
+        "textReveal": {
+         "type": "number",
+         "default": 1,
+         "description": "0..1"
+        },
+        "path": {
+         "description": "путь для текста по кривой (d, фигура или id узла)"
+        },
+        "pathOffset": {
+         "type": "number",
+         "default": 0,
+         "description": "сдвиг начала вдоль пути, 0..1"
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "растровый слой, центр в (x, y)",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "image"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "src": {
+         "type": "string"
+        },
+        "width": {
+         "type": "number",
+         "default": 100
+        },
+        "height": {
+         "type": "number",
+         "default": 100
+        },
+        "fit": {
+         "type": "string",
+         "default": "stretch"
+        },
+        "pixelated": {
+         "type": "boolean",
+         "default": false
+        },
+        "sheet": {
+         "description": "спрайт-лист"
+        },
+        "frame": {
+         "type": "number"
+        },
+        "normalSrc": {
+         "type": "string"
+        },
+        "normalMap": {
+         "type": "string"
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "экземпляр символа из scene.symbols: своя трансформация и своё время (timeOffset, timeScale), символ — по кругу или с остановкой",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "instance"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "symbol": {
+         "type": "string",
+         "description": "имя символа"
+        },
+        "loop": {
+         "type": "boolean",
+         "default": true,
+         "description": "по длительности символа — по кругу"
+        },
+        "symbolTime": {
+         "type": "number",
+         "description": "явное время символа (можно анимировать)"
+        },
+        "timeOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "timeScale": {
+         "type": "number",
+         "default": 1
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    },
+    {
+     "type": "object",
+     "required": [
+      "id",
+      "type"
+     ],
+     "description": "точечный свет: сам не рисуется, виден в превью «Свет» и уходит в Godot как `PointLight2D`, в Unity — как `Light2D`",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "type": {
+       "const": "light"
+      },
+      "parent": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "props": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "default": 0
+        },
+        "y": {
+         "type": "number",
+         "default": 0
+        },
+        "rotation": {
+         "type": "number",
+         "default": 0,
+         "description": "градусы"
+        },
+        "scale": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleX": {
+         "type": "number",
+         "default": 1
+        },
+        "scaleY": {
+         "type": "number",
+         "default": 1
+        },
+        "skewX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorX": {
+         "type": "number",
+         "default": 0
+        },
+        "anchorY": {
+         "type": "number",
+         "default": 0
+        },
+        "opacity": {
+         "type": "number",
+         "default": 1
+        },
+        "visible": {
+         "type": "boolean",
+         "default": true
+        },
+        "fill": {
+         "description": "цвет или градиент"
+        },
+        "stroke": {
+         "description": "цвет или градиент"
+        },
+        "strokeWidth": {
+         "type": "number",
+         "default": 2
+        },
+        "lineCap": {
+         "type": "string",
+         "default": "round"
+        },
+        "lineJoin": {
+         "type": "string",
+         "default": "round"
+        },
+        "dash": {
+         "description": "массив штрихов"
+        },
+        "trimStart": {
+         "type": "number",
+         "default": 0
+        },
+        "trimEnd": {
+         "type": "number",
+         "default": 1
+        },
+        "trimOffset": {
+         "type": "number",
+         "default": 0
+        },
+        "blur": {
+         "type": "number",
+         "default": 0
+        },
+        "glow": {},
+        "shadow": {},
+        "blend": {
+         "type": "string",
+         "description": "режим наложения"
+        },
+        "clip": {
+         "type": "string",
+         "description": "id узла-маски обрезки"
+        },
+        "mask": {
+         "type": "string",
+         "description": "id узла-маски"
+        },
+        "repeat": {
+         "description": "копии"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shade": {
+         "type": "boolean",
+         "default": false,
+         "description": "тень для дизеринга"
+        },
+        "dither": {},
+        "relief": {},
+        "surface": {
+         "description": "поверхность для отложенного света"
+        },
+        "z": {
+         "type": "number",
+         "default": 80
+        },
+        "color": {
+         "type": "string",
+         "default": "#ffffff"
+        },
+        "energy": {
+         "type": "number",
+         "default": 1
+        },
+        "radius": {
+         "type": "number",
+         "default": 500
+        },
+        "falloff": {
+         "type": "number",
+         "default": 1
+        }
+       }
+      },
+      "keys": {
+       "type": "object",
+       "additionalProperties": {
+        "type": "array",
+        "items": {
+         "$ref": "#/$defs/key"
+        }
+       }
+      },
+      "mods": {
+       "type": "array",
+       "items": {
+        "$ref": "#/$defs/mod"
+       }
+      }
+     }
+    }
+   ]
+  }
+ }
+}

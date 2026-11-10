@@ -1,6 +1,7 @@
 // Сквозной тест MCP-сервера: протокол, инструменты, превью.
-// node scripts/test-mcp.mjs [папка-для-картинок]
+// node test/mcp.test.mjs [папка-для-картинок]
 import { spawn } from 'node:child_process';
+import { request } from 'node:http';
 import { writeFileSync, mkdtempSync, existsSync, readFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,8 +9,10 @@ import { fileURLToPath } from 'node:url';
 
 const outDir = process.argv[2] || mkdtempSync(join(tmpdir(), 'kontur-test-'));
 const dir = mkdtempSync(join(tmpdir(), 'kontur-scene-'));
+const TOKEN = 'test-token-' + process.pid;
+const H = { headers: { 'x-kontur-token': TOKEN } };
 const srv = spawn(process.execPath, [fileURLToPath(new URL('../mcp/server.mjs', import.meta.url))], {
-  env: { ...process.env, KONTUR_SCENE: join(dir, 'scene.json'), KONTUR_PORT: '7799' }, stdio: ['pipe', 'pipe', 'pipe'],
+  env: { ...process.env, KONTUR_SCENE: join(dir, 'scene.json'), KONTUR_PORT: '7799', KONTUR_TOKEN: TOKEN }, stdio: ['pipe', 'pipe', 'pipe'],
 });
 let buf = '', id = 0;
 const pending = new Map();
@@ -85,12 +88,41 @@ try {
   // превью
   await new Promise((r) => setTimeout(r, 200));
   const url = (await call('preview_url')).content[0].text.match(/http\S+/)[0];
-  const sj = await (await fetch(url + 'scene.json')).json();
+  const sj = await (await fetch(url + 'scene.json', H)).json();
   check(sj.scene.nodes.length >= 3, `превью отдаёт сцену (${url})`);
   const page = await (await fetch(url)).text();
   check(page.includes('Kontur'), 'превью отдаёт плеер');
   const eng = await fetch(url + 'engine/kontur.js');
   check(eng.ok, 'превью отдаёт движок');
+  check((await fetch(url + 'scene.json')).status === 401, 'без токена сцена не отдаётся');
+  const evilHost = await new Promise((ok, fail) => {
+    const r = request(url + 'scene.json', { headers: { 'x-kontur-token': TOKEN, host: 'evil.example:7799' } }, (res) => { res.resume(); ok(res.statusCode); });
+    r.on('error', fail); r.end();
+  });
+  check(evilHost === 403, 'чужой Host отклоняется (DNS rebinding)');
+  const evilPost = await fetch(url + 'scene.json', { method: 'POST', headers: { 'x-kontur-token': TOKEN, origin: 'http://localhost:3000' }, body: '{}' });
+  check(evilPost.status === 403, 'POST с чужим Origin отклоняется');
+  const pageRes = await fetch(url + 'player/index.html');
+  const ck = (pageRes.headers.get('set-cookie') || '').split(';')[0];
+  check(/HttpOnly/.test(pageRes.headers.get('set-cookie')) && /SameSite=Strict/.test(pageRes.headers.get('set-cookie')), 'страница студии ставит cookie с токеном');
+  check((await fetch(url + 'scene.json', { headers: { cookie: ck } })).ok, 'cookie студии даёт доступ к API');
+  check((await fetch(url + 'asset?p=' + encodeURIComponent(fileURLToPath(new URL('../package.json', import.meta.url))), H)).status === 403, '/asset не отдаёт не-картинки');
+  const openEvil = await fetch(url + 'open', { method: 'POST', ...H, body: JSON.stringify({ path: join(tmpdir(), 'x.json') }) });
+  check(openEvil.status === 403, '/open — только сцены из папки сцены и examples/');
+  // правка патчем и общая история
+  const nid = sj.scene.nodes[0].id;
+  const pr = await fetch(url + 'patch?label=' + encodeURIComponent('патч'), { method: 'POST', ...H, body: JSON.stringify({ edits: { kontur: 'edits', version: 1, scene: {}, nodes: { [nid]: { props: { opacity: 0.25 } } }, removed: [], order: [] } }) });
+  const prj = await pr.json();
+  check(pr.ok && prj.history.undo > 0, '/patch принят, история на сервере');
+  const afterPatch = JSON.parse((await call('scene_get_json', { id: nid })).content[0].text);
+  check(afterPatch.props.opacity === 0.25, 'патч изменил только указанное свойство');
+  const un = await (await fetch(url + 'undo', { method: 'POST', ...H })).json();
+  check(un.label === 'патч', 'студия отменяет через общую историю');
+  const afterUndo = JSON.parse((await call('scene_get_json', { id: nid })).content[0].text);
+  check(afterUndo.props.opacity !== 0.25, 'undo вернул значение');
+  await fetch(url + 'redo', { method: 'POST', ...H });
+  check(JSON.parse((await call('scene_get_json', { id: nid })).content[0].text).props.opacity === 0.25, 'redo');
+  await call('undo');
 
   // растровые слои и дизеринг
   const tex = fileURLToPath(new URL('../examples/assets/paint-texture.jpg', import.meta.url));
@@ -108,10 +140,10 @@ try {
   check(svgTxt.includes('<pattern') && svgTxt.includes('data:image/jpeg;base64'), 'рендер: растр-паттерн и встроенная картинка');
   const fr = await call('render_frame', { t: 0.5, width: 640 });
   writeFileSync(join(outDir, 'mcp-raster-dither.png'), Buffer.from(fr.content[0].data, 'base64'));
-  const prev = await (await fetch('http://127.0.0.1:7799/scene.json')).json();
+  const prev = await (await fetch('http://127.0.0.1:7799/scene.json', H)).json();
   const texSrc = prev.scene.nodes.find((n) => n.id === 'tex').props.src;
   check(texSrc.startsWith('/asset?p='), 'превью переписывает путь ассета');
-  check((await fetch('http://127.0.0.1:7799' + texSrc)).ok, 'превью отдаёт ассет');
+  check((await fetch('http://127.0.0.1:7799' + texSrc, H)).ok, 'превью отдаёт ассет');
 
   // клипы, нормали, совместимость, экспорт в Godot
   await call('clip_set', { name: 'idle', start: 0, end: 2 });
@@ -199,6 +231,9 @@ try {
   await call('camera3d_set', { f: 600 });
   const wj2 = JSON.parse((await call('scene_get_json')).content[0].text);
   check(wj2.camera3d.f === 600 && wj2.nodes.find((n) => n.id === 'world') && Math.abs(wj2.nodes.length - n0) < n0 * 0.5 && JSON.stringify(wj2.nodes) !== JSON.stringify(wj.nodes), 'camera3d_set: мир пересобран под новую камеру');
+  const wi = await call('world_item', { index: 4, patch: { rx: 1.2 } });
+  const wjI = JSON.parse((await call('scene_get_json')).content[0].text);
+  check(/Предмет #4 изменён/.test(wi.content[0].text) && /Из кэша: \d+ из 6/.test(wi.content[0].text) && wjI.nodes.find((n) => n.id === "world").props.world3d.items[4].rx === 1.2, 'world_item: предмет изменён, остальные из кэша');
   // материал на свою грань
   await call('node_add', { id: 'myWall', type: 'path', props: { d: 'M 420 90 L 600 70 L 600 260 L 420 250 Z', fill: '#a07050', surface: { normal: [0, 0, -1], plane: [0, 0, -1, -9] } } });
   const ma = await call('material_apply', { id: 'myWall', material: 'brick', color: '#a05040' });
@@ -225,7 +260,7 @@ try {
   const pDir = join(outDir, 'passes');
   await call('render_passes', { dir: pDir, width: 320, lit: true });
   check(['color', 'normal', 'plane', 'planeD', 'emissive', 'ink', 'cover', 'mask_chr', 'normal_map', 'lit', 'shadow_ao'].every((k) => existsSync(join(pDir, `${k}.png`))), 'render_passes: все проходы и карта нормалей');
-  const litPng = await fetch('http://127.0.0.1:7799/lit.png?w=320');
+  const litPng = await fetch('http://127.0.0.1:7799/lit.png?w=320', H);
   check(litPng.status === 200 && (await litPng.arrayBuffer()).byteLength > 1000, 'студия: /lit.png отдаёт кадр с отложенным светом');
   const ex = join(outDir, 'baked.png');
   await call('export', { format: 'png', path: ex, lit: 'deferred', width: 320 });

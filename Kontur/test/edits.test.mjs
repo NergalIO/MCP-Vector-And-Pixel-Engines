@@ -1,6 +1,6 @@
 // Сквозной тест режима правок и новых инструментов MCP-сервера:
 // сцена из «скрипта» (*.kontur.json рядом с *.build.mjs) → правки в *.edits.json → пересборка → правки на месте.
-// node scripts/test-edits.mjs
+// node test/edits.test.mjs
 import { spawn } from 'node:child_process';
 import { writeFileSync, readFileSync, mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,7 +30,7 @@ build(1);
 writeFileSync(join(dir, 'room.build.mjs'), '// признак: сцену пишет скрипт\n');
 
 const srv = spawn(process.execPath, [fileURLToPath(new URL('../mcp/server.mjs', import.meta.url))], {
-  env: { ...process.env, KONTUR_SCENE: sceneFile, KONTUR_PORT: String(PORT) }, stdio: ['pipe', 'pipe', 'pipe'],
+  env: { ...process.env, KONTUR_SCENE: sceneFile, KONTUR_PORT: String(PORT), KONTUR_TOKEN: 'edits-' + PORT }, stdio: ['pipe', 'pipe', 'pipe'],
 });
 let buf = '', id = 0;
 const pending = new Map();
@@ -51,7 +51,7 @@ const txt = (r) => r.content.find((c) => c.type === 'text')?.text || '';
 const sceneNow = async () => JSON.parse(txt(await call('scene_get_json')));
 const node = (s, nid) => s.nodes.find((n) => n.id === nid);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const http = async (path, init) => { const r = await fetch(`http://127.0.0.1:${PORT}${path}`, init); if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`); return r; };
+const http = async (path, init) => { const r = await fetch(`http://127.0.0.1:${PORT}${path}`, { ...init, headers: { ...(init?.headers || {}), 'x-kontur-token': 'edits-' + PORT } }); if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`); return r; };
 let ok = 0;
 const check = (cond, msg) => { if (!cond) throw new Error('ПРОВАЛ: ' + msg); ok++; console.log('✓', msg); };
 
