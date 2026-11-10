@@ -13,6 +13,15 @@ const env = String(process.env.KONTUR_GPU ?? '').trim().toLowerCase();
 const wanted = !isMainThread || !env || env === '0' || env === 'off' || env === 'false' ? new Set()
   : /^(1|on|all|true)$/.test(env) ? new Set(STAGES) : new Set(env.split(/[\s,]+/).filter((s) => STAGES.includes(s)));
 
+/**
+ * Программный адаптер (WARP «Microsoft Basic Render Driver», SwiftShader, llvmpipe — машины без видеокарты, CI):
+ * он медленнее процессорного пути, а Dawn на нём падает целым процессом, поэтому такой адаптер не берём.
+ */
+export function softwareAdapter(adapter) {
+  const i = adapter?.info || {};
+  return !!(adapter?.isFallbackAdapter || i.isFallbackAdapter || /microsoft|basic render|warp|swiftshader|llvmpipe|lavapipe/i.test(`${i.vendor} ${i.architecture} ${i.device} ${i.description}`));
+}
+
 /** Меньше стольких пикселей — на процессоре (пересылка дороже счёта). */
 export const GPU_MIN_PIXELS = 30000;
 

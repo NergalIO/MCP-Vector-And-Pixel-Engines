@@ -2,6 +2,7 @@
 // загрузка массивов из общей памяти, цепочка compute-проходов, чтение результатов обратно в общую память.
 // Главный поток ждёт ответа через Atomics.wait, поэтому для этапов вызов синхронный.
 import { parentPort } from 'node:worker_threads';
+import { softwareAdapter } from './gpu.mjs';
 
 // Экземпляр Dawn и адаптер держим ссылками: если сборщик мусора заберёт их обёртки, живое устройство роняет процесс.
 const keep = {};
@@ -14,6 +15,7 @@ async function init() {
   keep.gpu = create([]);
   keep.adapter = await keep.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!keep.adapter) throw new Error('нет адаптера WebGPU');
+  if (softwareAdapter(keep.adapter)) throw new Error(`программный адаптер (${keep.adapter.info?.description || keep.adapter.info?.vendor || '?'}) — этапы на процессоре`);
   const L = keep.adapter.limits;
   device = await keep.adapter.requestDevice({ requiredLimits: {
     maxStorageBuffersPerShaderStage: Math.min(16, L.maxStorageBuffersPerShaderStage),

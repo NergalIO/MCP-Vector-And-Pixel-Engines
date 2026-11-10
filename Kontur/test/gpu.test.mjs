@@ -38,14 +38,20 @@ const hasAdapter = async () => {
   try {
     const { create, globals } = await import('webgpu');
     Object.assign(globalThis, globals);
-    const gpu = create([]);
-    const a = await gpu.requestAdapter();
-    return !!a;
-  } catch { return false; }
+    const { softwareAdapter } = await import('../mcp/lit/gpu.mjs');
+    keep.gpu = create([]); // ссылка до конца процесса: собранный GC экземпляр Dawn роняет процесс
+    keep.a = await keep.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!keep.a) return 'нет адаптера WebGPU';
+    // программный адаптер (CI без видеокарты) рендер не берёт — кадр считался бы на процессоре
+    return softwareAdapter(keep.a) ? `программный адаптер (${keep.a.info?.description || keep.a.info?.vendor})` : null;
+  } catch (e) { return `нет пакета webgpu (${e.message})`; }
 };
+const keep = {};
 
 test('KONTUR_GPU: кадр на видеокарте совпадает с процессорным в пределах округления', async (t) => {
-  if (!(await hasAdapter())) { t.skip('нет webgpu или адаптера'); return; }
+  const why = await hasAdapter();
+  if (why) { t.skip(why); return; }
+  t.diagnostic(`адаптер: ${keep.a.info?.vendor} | ${keep.a.info?.architecture} | ${keep.a.info?.description}`);
   const cpu = render(false), gpu = render(true);
   if (cpu.skip) { t.skip(cpu.skip); return; }
   assert.equal(cpu.gpu, null, 'без KONTUR_GPU видеокарта не используется');

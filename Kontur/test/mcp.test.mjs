@@ -79,8 +79,11 @@ try {
   check(sheet.content[0].type === 'image', 'render_contact_sheet');
 
   await call('export', { format: 'html', path: join(outDir, 'export.html') });
-  await call('export', { format: 'gif', path: join(outDir, 'export.gif'), fps: 15, width: 480 });
-  check(true, 'экспорт html и gif');
+  // gif — через ffmpeg: без него в PATH (CI) экспорт честно отказывает, проверяем только html
+  if (/Видео: да/.test(info.content[0].text)) {
+    await call('export', { format: 'gif', path: join(outDir, 'export.gif'), fps: 15, width: 480 });
+    check(true, 'экспорт html и gif');
+  } else check(true, 'экспорт html (gif пропущен: нет ffmpeg)');
 
   const res = await rpc('resources/read', { uri: 'kontur://docs/reference' });
   check(res.result.contents[0].text.includes('Модификаторы') || res.result.contents[0].text.includes('модификаторы'), 'ресурс документации');
