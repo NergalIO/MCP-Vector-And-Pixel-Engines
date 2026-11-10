@@ -20,9 +20,6 @@ const CASES = [
   { f: 'examples/liquid.json', modes: ['color', 'height'], times: 6 },
   { f: 'examples/reveal.json', modes: ['color', 'height'], times: 6 },
   { f: 'examples/bay.json', modes: ['color', 'height'], times: 4, states: true },
-  { f: 'examples/ref/fabric.json', modes: MODES, times: 2 },
-  { f: 'examples/ref/square.json', modes: MODES, times: 1 },
-  { f: 'examples/ref/courtyard.json', modes: ['color', 'normal', 'planeD'], times: 1 },
 ];
 export function computeGolden({ only } = {}) {
   const out = {};

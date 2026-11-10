@@ -2,6 +2,8 @@
 // Разбиение по SAH на корзинах (12 корзин по оси с наибольшим разбросом центров), typed arrays, обход стеком без рекурсии.
 // Треугольник с alpha < 1 (листва, флажки, решётки) задерживает луч с вероятностью alpha (хеш луча и номера) —
 // после размытия это частичная тень.
+// Массивы — в общей памяти пула потоков: воркеры собирают обход по ним (bvhFromData) без копирования.
+import { f32, i32 } from './lit/pool.mjs';
 
 /**
  * Построить BVH. occ: { boxes: [[x0,x1,y0,y1,z0,z1]…], tris: [[[x,y,z]×3]…], triAlpha?: [a…], boxAlpha?: [a…] }.
@@ -10,8 +12,8 @@
 export function buildBVH({ boxes = [], tris = [], triAlpha = [], boxAlpha = [] } = {}) {
   const nt = tris.length, nb = boxes.length, n = nt + nb;
   // примитивы: треугольник — v0 и рёбра; коробка — min/max
-  const T = new Float32Array(nt * 9), A = new Float32Array(n).fill(1);
-  const B = new Float32Array(n * 6), Cx = new Float32Array(n), Cy = new Float32Array(n), Cz = new Float32Array(n);
+  const T = f32(nt * 9), A = f32(n).fill(1);
+  const B = f32(n * 6), Cx = new Float32Array(n), Cy = new Float32Array(n), Cz = new Float32Array(n);
   for (let i = 0; i < nt; i++) {
     const t = tris[i], a = t[0], b = t[1], c = t[2];
     T.set([a[0], a[1], a[2], b[0] - a[0], b[1] - a[1], b[2] - a[2], c[0] - a[0], c[1] - a[1], c[2] - a[2]], i * 9);
@@ -27,11 +29,11 @@ export function buildBVH({ boxes = [], tris = [], triAlpha = [], boxAlpha = [] }
     Cx[i] = (x0 + x1) / 2; Cy[i] = (y0 + y1) / 2; Cz[i] = (z0 + z1) / 2;
     if (boxAlpha[j] != null) A[i] = boxAlpha[j];
   }
-  const idx = new Int32Array(n);
+  const idx = i32(n);
   for (let i = 0; i < n; i++) idx[i] = i;
   // узлы: границы (6) + [левый или начало, правый или −число] (лист: second < 0 → count = −second)
   const maxNodes = Math.max(1, 2 * n);
-  const NB = new Float32Array(maxNodes * 6), NC = new Int32Array(maxNodes * 2);
+  const NB = f32(maxNodes * 6), NC = i32(maxNodes * 2);
   let nodes = 0;
   const C = [Cx, Cy, Cz], LEAF = 4, BINS = 12;
   const bounds = (s, e, o) => {
@@ -95,6 +97,14 @@ export function buildBVH({ boxes = [], tris = [], triAlpha = [], boxAlpha = [] }
       stack.push([s, mid, l], [mid, e, r]);
     }
   }
+  return bvhFromData({ T, A, B, idx, NB, NC, nt, n, nodes });
+}
+
+/**
+ * Обход BVH по готовым массивам (data из buildBVH): так же собирается BVH в воркере пула (массивы — в общей памяти).
+ */
+export function bvhFromData(data) {
+  const { T, A, B, idx, NB, NC, nt, n, nodes } = data;
   const st = new Int32Array(512);
   const hitPrim = (p, ox, oy, oz, dx, dy, dz, tmax) => {
     if (p < nt) {
@@ -147,7 +157,7 @@ export function buildBVH({ boxes = [], tris = [], triAlpha = [], boxAlpha = [] }
     return best < tmax ? best : Infinity;
   };
   return {
-    nodes, prims: n,
+    nodes, prims: n, data,
     occluded: (ox, oy, oz, dx, dy, dz, tmax = 1e9, seed = 0) => trav(ox, oy, oz, dx, dy, dz, tmax, true, seed) < Infinity,
     closest: (ox, oy, oz, dx, dy, dz, tmax = 1e9, seed = 0) => trav(ox, oy, oz, dx, dy, dz, tmax, false, seed),
   };

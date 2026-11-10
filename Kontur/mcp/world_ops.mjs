@@ -56,14 +56,14 @@ export function withItemIds(items) {
  * v: версия сборки мира — 2 (по умолчанию для новых миров): подсиды предметов и граней, стабильные id,
  * детализация lod (1) и слияние деталей merge (true); 1 — прежняя. pan — проезд камеры [[t, dx], …].
  */
-export function worldBuild(scene, { items = [], seed = 1, group = 'world', sky, background, parent = null, occ, materials, v = 2, lod, merge, pan } = {}) {
+export function worldBuild(scene, { items = [], seed = 1, group = 'world', sky, background, parent = null, occ, materials, v = 2, lod, merge, tess, pan } = {}) {
   if (v >= 2) items = withItemIds(items);
   if (!scene.camera3d) scene.camera3d = fitCamera({ width: scene.width, height: scene.height });
   // попиксельные материалы (pmat у предметов): описание сливается в scene.materials
   if (materials && typeof materials === 'object') scene.materials = { ...(scene.materials || {}), ...materials };
-  const { S, errors, warnings, stats, cache } = buildWorld({ width: scene.width, height: scene.height, camera3d: cameraOf(scene), seed, items, sky, v, lod, merge, cache: WORLD_CACHE.get(group) || new Map(), ...(occ ? { occ } : {}) });
+  const { S, errors, warnings, stats, cache } = buildWorld({ width: scene.width, height: scene.height, camera3d: cameraOf(scene), seed, items, sky, v, lod, merge, tess, cache: WORLD_CACHE.get(group) || new Map(), ...(occ ? { occ } : {}) });
   if (cache) WORLD_CACHE.set(group, cache);
-  const opt = { ...(v >= 2 ? { v: 2 } : {}), ...(lod != null ? { lod } : {}), ...(merge != null ? { merge } : {}), ...(pan ? { pan } : {}), ...(sky ? { sky } : {}), ...(occ ? { occ } : {}) };
+  const opt = { ...(v >= 2 ? { v: 2 } : {}), ...(lod != null ? { lod } : {}), ...(merge != null ? { merge } : {}), ...(tess ? { tess } : {}), ...(pan ? { pan } : {}), ...(sky ? { sky } : {}), ...(occ ? { occ } : {}) };
   const r = toNodes(S, { group, idPrefix: `${group}_`, parent, pan, world3d: { items, seed, ...opt } });
   replaceSubtree(scene, group, r.nodes, { prefix: `${group}_` });
   const defBg = !scene.background || scene.background === '#0d0f1a';
@@ -83,7 +83,7 @@ export function worldHints(items, stats, total) {
   if (total > 15000) out.push(`всего ${total} узлов: рендер и отложенный свет замедлятся; lod: 2 упрощает дальние детали`);
   return out;
 }
-const worldOpts = (w) => ({ items: w.items, seed: w.seed, sky: w.sky, occ: w.occ, v: w.v ?? 1, lod: w.lod, merge: w.merge, pan: w.pan });
+const worldOpts = (w) => ({ items: w.items, seed: w.seed, sky: w.sky, occ: w.occ, v: w.v ?? 1, lod: w.lod, merge: w.merge, tess: w.tess, pan: w.pan });
 /**
  * Правка одного предмета мира group: найти по id (или index), заменить (item), дополнить (patch; null — удалить поле),
  * удалить (remove) или добавить новый (add). Мир пересобирается; неизменённые предметы берутся из кэша.

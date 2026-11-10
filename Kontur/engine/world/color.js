@@ -22,7 +22,6 @@ const hexRGB = (h) => {
 };
 const HEX2 = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
 const hx = (v) => HEX2[Math.max(0, Math.min(255, Math.round(v)))];
-const RGBhex = (c) => '#' + hx(c[0]) + hx(c[1]) + hx(c[2]);
 export const col = (c) => (c && C[c] ? C[c] : c);
 export const mix = (a, b, t) => { const p = hexRGB(col(a)), q = hexRGB(col(b)); return '#' + hx(p[0] + (q[0] - p[0]) * t) + hx(p[1] + (q[1] - p[1]) * t) + hx(p[2] + (q[2] - p[2]) * t); };
 export const dark = (a, t = 0.25) => mix(a, '#2a1a2a', t);

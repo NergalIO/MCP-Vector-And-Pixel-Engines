@@ -268,8 +268,18 @@ export const worldItemParams = (type) => { const v = WORLD_ITEMS[type]; return v
  * v: 2 — подсиды предметов и граней, стабильные id. Возвращает { S, errors, warnings, stats }:
  * stats[i] = { type, elements, ms } по предметам (узлы добавляет toNodes: r.perItem).
  */
+/**
+ * Тесселяция кривых: true или 'adaptive' — сегмент около 6 px; число — px на сегмент; { px, min, max }; иначе null.
+ */
+export function normTess(t) {
+  if (t == null || t === false || t === 0) return null;
+  if (t === true || t === 'adaptive') return { px: 6, min: 8, max: 96 };
+  if (typeof t === 'number') return { px: Math.max(1, t), min: 8, max: 96 };
+  if (typeof t === 'object') return { px: Math.max(1, t.px ?? 6), min: Math.max(3, t.min ?? 8), max: Math.max(8, Math.min(256, t.max ?? 96)) };
+  throw new Error(`tess: true, число (px на сегмент) или {px, min, max}, а не ${JSON.stringify(t)}`);
+}
 export function buildWorld(opts = {}) { return withSeed(opts.seed ?? 1, () => buildWorldRaw(opts)); }
-function buildWorldRaw({ width = 1920, height = 1080, camera3d = {}, items = [], sky, occ = 'auto', seed = 1, v = 1, lod, merge, cache } = {}) {
+function buildWorldRaw({ width = 1920, height = 1080, camera3d = {}, items = [], sky, occ = 'auto', seed = 1, v = 1, lod, merge, tess, cache } = {}) {
   const S = Scene({ W: width, H: height, ...CAMERA_DEFAULT, ...camera3d });
   // 'manual' и 'boxes' — только явные коробки и треугольники (инструмент world_build называет режим 'boxes')
   S.autoOcc = occ !== 'manual' && occ !== 'boxes';
@@ -278,6 +288,7 @@ function buildWorldRaw({ width = 1920, height = 1080, camera3d = {}, items = [],
   // v2: по умолчанию упрощать невидимо мелкие фаски и сливать детали граней в составные пути
   S.lod = Math.max(0, Math.min(2, Math.round(lod ?? (S.v >= 2 ? 1 : 0))));
   S.merge = merge ?? S.v >= 2;
+  S.tess = normTess(tess);
   if (Array.isArray(sky) && sky.length === 3) S.skyGrad = sky.map(col);
   const errs = [], warns = [], stats = [];
   const mats = (m) => { if (!m) return undefined; const o = {}; for (const k in m) o[k] = m[k] ? [m[k][0], col(m[k][1]), m[k][2] || {}] : null; return o; };
@@ -304,7 +315,7 @@ function buildWorldRaw({ width = 1920, height = 1080, camera3d = {}, items = [],
   // если не изменились сам предмет, его сид, камера и настройки
   const useCache = S.v >= 2 && cache instanceof Map;
   const cacheOut = useCache ? new Map() : null;
-  const world = useCache ? JSON.stringify([width, height, camera3d, occ, S.lod, S.merge]) : '';
+  const world = useCache ? JSON.stringify([width, height, camera3d, occ, S.lod, S.merge, S.tess]) : '';
   const one = (d, i, label) => {
     const at = { items: S.items.length, lights: S.lights.length, sky: S.sky.length, occ: S.occ.length, tris: S.tris.length };
     const t0 = performance.now();

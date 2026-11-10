@@ -13,4 +13,4 @@ export { bevel, blob, MAT, MATERIALS, MATERIAL_DOCS, registerMaterial, materialP
 export { face, frameOf, box, cyl, smoothProfile, PROFILES, registerProfile, lathe, latheStack, sphere, sphereTris, arch, awning, disc, stairs } from './world/shapes.js';
 export { house, windowPrims, doorPrims, pipePrims, ivy, char, textPrim } from './world/facade.js';
 export { toNodes, toScene } from './world/emit.js';
-export { WORLD_ITEMS, registerWorldItem, worldItemsDoc, worldItemParams, checkWorldItem, buildWorld } from './world/items.js';
+export { WORLD_ITEMS, registerWorldItem, worldItemsDoc, worldItemParams, checkWorldItem, buildWorld, normTess } from './world/items.js';

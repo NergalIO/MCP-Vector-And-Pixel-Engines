@@ -69,7 +69,7 @@ export function box(S, x0, x1, y0, y1, z0, z1, c, o = {}) {
 export function cyl(S, X, Z, r, y0, y1, c, o = {}) {
   const bandsLines = [];
   if (o.bands) for (let y = y0 + o.bands; y < y1 - 0.02; y += o.bands) bandsLines.push(y);
-  return lathe(S, X, Z, [[r, y0, 'c'], [r, y1, 'c']], c, { ...o, y0: 0, n: o.n && o.n >= 8 ? Math.min(o.n, 24) : 16, top: o.top, rings: bandsLines.length ? { ys: bandsLines, color: dark(c, 0.3) } : null, name: o.name || 'cyl' });
+  return lathe(S, X, Z, [[r, y0, 'c'], [r, y1, 'c']], c, { ...o, y0: 0, n: o.n && o.n >= 8 ? Math.min(o.n, S.tess ? 96 : 24) : S.tess ? undefined : 16, top: o.top, rings: bandsLines.length ? { ys: bandsLines, color: dark(c, 0.3) } : null, name: o.name || 'cyl' });
 }
 
 /** Сглаживание профиля Катмулл — Ромом; точки с флагом 'c' ([r, y, 'c']) — изломы, через них не сглаживается. */
@@ -139,7 +139,8 @@ export function lathe(S, X, Z, prof, c, o = {}) {
     if (!other || P0[i][2] === 'c' || ang2(own, other) > creaseA) return own;
     return nrm2([own[0] + other[0], own[1] + other[1]]);
   };
-  const nSeg = Math.max(8, o.n || 16);
+  const maxR0 = Math.max(...P0.map((p) => p[0])), midY = (P0[0][1] + P0[nS][1]) / 2;
+  const nSeg = Math.max(8, o.n || S.segs(16, maxR0, [X, midY, Z]));
   const cam = S.cam, Dx = cam[0] - X, Dz = cam[2] - Z, D = Math.hypot(Dx, Dz), th = Math.atan2(Dz, Dx);
   const q = (a, r, y) => [X + Math.cos(a) * r, y, Z + Math.sin(a) * r];
   const spec = o.spec ?? 0.15, sw = S.sw(Z);
@@ -168,7 +169,7 @@ export function lathe(S, X, Z, prof, c, o = {}) {
         if (!fac[k]) { k++; continue; }
         let e = k; while (e + 1 < m && fac[e + 1]) e++;
         const as = A + ((B - A) * k) / m, ae = A + ((B - A) * (e + 1)) / m, amid = (as + ae) / 2;
-        const steps = Math.max(2, Math.ceil(((ae - as) / TAU) * 48));
+        const steps = S.tess ? Math.max(2, S.segs(2, rm, q(amid, rm, (ya + yb) / 2), ae - as, 2) * 2) : Math.max(2, Math.ceil(((ae - as) / TAU) * 48));
         const prims = [];
         const nsub = Math.max(1, Math.min(6, Math.ceil(ang2(na, nb) / (6 * Math.PI / 180))));
         for (let j = 0; j < nsub; j++) {
@@ -195,7 +196,8 @@ export function lathe(S, X, Z, prof, c, o = {}) {
   // гладь внутри чаши и крышка сверху
   const disk = (y, r, col, sp, em, nm = 'cap') => {
     if (y >= S.camH || r <= 0) return;
-    const ps = arc(0, TAU * (1 - 1 / 48), r, y, 47);
+    const nd = S.segs(48, r, [X, y, Z]);
+    const ps = arc(0, TAU * (1 - 1 / nd), r, y, nd - 1);
     runs.push({ d: dist3(cam, [X, y, Z]) + (nm === 'fill' ? 0 : -1e-3), prims: [{ t: 'poly', ps, alb: col, n: [0, 1, 0], pl: [0, 1, 0, y], base: true, ink: nm === 'cap', spec: sp, em, op: 1, sw }] });
   };
   if (o.fill) disk(o.fill.y + y0, o.fill.r, o.fill.color || C.water, o.fill.spec ?? 0.8, o.fill.em, 'fill');
@@ -225,7 +227,7 @@ export function lathe(S, X, Z, prof, c, o = {}) {
   const it = S.item(o.key ?? Z - maxR, prims, { name: o.name || 'lathe', pmat: o.pmat, force: Array.isArray(o.runs) });
   if (o.occ !== false && it) {
     // окклюдер: исходный профиль, 12 граней на оборот, чуть внутри поверхности (без самозатенения граней-плоскостей)
-    const pr = prof.map(([r, y]) => [Math.max(0, r) * 0.9, y + y0]), m = 12;
+    const pr = prof.map(([r, y]) => [Math.max(0, r) * 0.9, y + y0]), m = S.tess ? Math.max(8, Math.min(48, Math.round(nSeg * 0.75))) : 12;
     for (let i = 0; i + 1 < pr.length; i++) for (let k = 0; k < m; k++) {
       const a0 = (k / m) * TAU, a1 = ((k + 1) / m) * TAU;
       const A0 = q(a0, pr[i][0], pr[i][1]), A1 = q(a1, pr[i][0], pr[i][1]), B0 = q(a0, pr[i + 1][0], pr[i + 1][1]), B1 = q(a1, pr[i + 1][0], pr[i + 1][1]);
@@ -276,7 +278,7 @@ export function sphere(S, X, Y, Z, R, c, o = {}) {
   let e2 = norm(cross(v, e1)); if (e2[1] < 0) e2 = mul(e2, -1);
   if (dot(cross(e1, e2), v) < 0) e1 = mul(e1, -1);
   const rs = R * Math.sqrt(Math.max(0, 1 - (R / dist) ** 2)), cs = add(cen, mul(v, (R * R) / dist));
-  const N = 40, ps = [];
+  const N = o.wob ? 40 : S.segs(40, rs, cs, TAU, 12), ps = [];
   for (let i = 0; i < N; i++) {
     const t = (i / N) * TAU, w = o.wob ? 1 + (rnd() - 0.5) * 2 * o.wob : 1;
     if (o.dome && Math.sin(t) < -1e-9) continue;
@@ -292,12 +294,12 @@ export function sphere(S, X, Y, Z, R, c, o = {}) {
   const prim = { t: 'poly', ps, alb: c, n: v, pl: [...v, dot(v, pp)], base: true, ink: o.ink ?? true, spec: o.spec ?? 0.15, em: o.em, op: 1, sw: S.sw(Z) * 0.8, ng: rx > 0.5 ? { kind: 'sphere', c: sc, r: [rx, ry], flat: o.flat ?? 0 } : undefined };
   if (o.prims) return [prim];
   const it = S.item(o.key ?? Z - R, [prim], { name: o.name || (o.dome ? 'dome' : 'sphere') });
-  if (o.occ !== false) sphereTris(cen, R * 0.6, o.dome).forEach((t) => S.tri3(t, it));
+  if (o.occ !== false) sphereTris(cen, R * 0.6, o.dome, S.segs(10, R, cen, TAU, 10)).forEach((t) => S.tri3(t, it));
   return [prim];
 }
-/** Треугольники сферы (UV 6×10) для окклюдера. */
-export function sphereTris(c, r, dome = false) {
-  const out = [], la = 6, lo = 10;
+/** Треугольники сферы (UV la×lo, по умолчанию 6×10) для окклюдера. */
+export function sphereTris(c, r, dome = false, lo = 10) {
+  const out = [], la = Math.max(4, Math.round(lo * 0.6));
   const pt = (i, j) => { const ph = (dome ? 0.5 : 0) * Math.PI + (i / la) * Math.PI * (dome ? 0.5 : 1) - Math.PI / 2, th = (j / lo) * TAU; return [c[0] + Math.cos(ph) * Math.cos(th) * r, c[1] + Math.sin(ph) * r, c[2] + Math.cos(ph) * Math.sin(th) * r]; };
   for (let i = 0; i < la; i++) for (let j = 0; j < lo; j++) { out.push([pt(i, j), pt(i, j + 1), pt(i + 1, j + 1)]); out.push([pt(i, j), pt(i + 1, j + 1), pt(i + 1, j)]); }
   return out;
@@ -310,7 +312,7 @@ export function sphereTris(c, r, dome = false) {
 export function arch(S, x0, x1, Z, y0, spring, thick, c, o = {}) {
   const w = x1 - x0, R = w / 2, xc = (x0 + x1) / 2, ys = spring, mg = o.margin ?? 0.45;
   const top = o.top ?? ys + R + mg, X0 = x0 - mg, X1 = x1 + mg, Zb = Z + thick;
-  const N = 16;
+  const N = S.tess ? 2 * Math.ceil(S.segs(16, R, [xc, ys + R / 2, Z], Math.PI, 8) / 2) : 16;
   const arcP = (z, a0 = 0, a1 = Math.PI, n = N) => { const out = []; for (let k = 0; k <= n; k++) { const a = a0 + ((a1 - a0) * k) / n; out.push([xc - Math.cos(a) * R, ys + Math.sin(a) * R, z]); } return out; };
   const prims = [];
   // за проёмом — тёмная глубина (если задана)
@@ -398,7 +400,7 @@ export function awning(S, x0, x1, z, y1, depth, drop, o = {}) {
 }
 /** Плоский эллипс на горизонтальной плоскости Y (лужа, люк, ковёр). Возвращает примитив. */
 export function disc(S, X, Y, Z, rx, rz, c, o = {}) {
-  const n = o.n || 36, ps = [];
+  const n = o.n || (o.wob ? 36 : S.segs(36, Math.max(rx, rz), [X, Y, Z])), ps = [];
   for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2; ps.push([X + Math.cos(a) * rx * (o.wob ? 0.85 + rnd() * 0.3 : 1), Y, Z + Math.sin(a) * rz * (o.wob ? 0.85 + rnd() * 0.3 : 1)]); }
   return { t: 'poly', ps, alb: c, n: o.n3 || [0, 1, 0], pl: [0, 1, 0, Y], base: o.base ?? false, bump: true, ink: o.ink ?? false, spec: o.spec ?? 0.1, em: o.em, op: o.op ?? 1 };
 }

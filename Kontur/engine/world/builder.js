@@ -56,13 +56,25 @@ export function Scene({ W = 1920, H = 1080, hor, f, camH, dz = 0, cx, yaw, pitch
   S.cam = cm.pos;
   S.camera = cm;
   S.P = cm.P;
+  /**
+   * Адаптивная тесселяция кривых (тела вращения, сферы, диски, арки, их окклюдеры): null — прежние постоянные числа
+   * сегментов (кадр мира не меняется); { px, min, max } — сегмент дуги на экране около px пикселей: ближние предметы
+   * глаже (силуэт и тень без граней), дальние — проще (меньше узлов).
+   */
+  S.tess = null;
+  /** Число сегментов дуги радиуса r (м) с углом arc около точки at: base без тесселяции. */
+  S.segs = (base, r, at, arc = Math.PI * 2, min = 8) => {
+    if (!S.tess) return base;
+    const px = (arc * r * cm.f) / Math.max(0.3, cm.depth(at));
+    return Math.max(min, S.tess.min ?? 0, Math.min(S.tess.max ?? 96, Math.ceil(px / (S.tess.px || 6))));
+  };
   S.charPx = (Z) => cm.charPx(Z);
   S.sw = cm.sw;
   S.pxPerUnit = cm.pxPerUnit;
-  /** Элемент сцены: key — ключ сортировки художника (больше — дальше, рисуется раньше). */
+  /** Элемент сцены: key — ключ сортировки художника (больше — дальше, рисуется раньше). o.keep — оставить пустую группу узлов (слот). */
   S.item = (key, prims, o = {}) => {
     if (!prims.length && !o.force && !S.keepEmpty) return null;
-    const it = { key, prims, name: o.name, occ: [], tris: [], auto: S.pend, alpha: o.alpha, pmat: o.pmat };
+    const it = { key, prims, name: o.name, occ: [], tris: [], auto: S.pend, alpha: o.alpha, pmat: o.pmat, ...(o.keep ? { keep: true } : {}) };
     S.pend = [];
     S.items.push(it);
     return it;

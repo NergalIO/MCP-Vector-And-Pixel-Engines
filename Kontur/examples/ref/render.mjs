@@ -1,6 +1,7 @@
-// Рендер референсных сцен: node examples/ref/render.mjs [имя…] [--width 1280] [--debug]
+// Рендер референсных сцен: node examples/ref/render.mjs [имя…] [--width 1280] [--debug] [--t 0]
 // Для каждой сцены: examples/ref/<имя>.json (сцена Kontur) и examples/ref/out/<имя>.png; в конце — лист out/sheet.png.
-import { writeFileSync, mkdirSync } from 'node:fs';
+// Если рядом есть <имя>.anim.mjs, сцена анимируется (ключи в JSON), а кадр берётся в момент --t (видео — anim.mjs).
+import { writeFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeScene } from './common.mjs';
@@ -9,12 +10,13 @@ import { probeRaster } from '../../mcp/render.mjs';
 import { decodePNG, encodePNG, scaleDown } from '../../mcp/normals.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const ALL = ['square', 'courtyard', 'fabric', 'post', 'townhall'];
+const ALL = readdirSync(here).filter((f) => f.endsWith('.build.mjs')).map((f) => f.slice(0, -'.build.mjs'.length));
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
 const names = args.filter((a, i) => !a.startsWith('--') && !(i > 0 && args[i - 1].startsWith('--'))).filter((a) => ALL.includes(a));
 const width = +opt('--width', 1280);
 const debug = args.includes('--debug');
+const at = +opt('--t', 0);
 await probeRaster();
 mkdirSync(resolve(here, 'out'), { recursive: true });
 const tiles = [];
@@ -22,9 +24,10 @@ for (const name of names.length ? names : ALL) {
   const def = (await import(`./${name}.build.mjs`)).default;
   const t0 = Date.now();
   const { scene } = makeScene(def);
+  if (existsSync(resolve(here, `${name}.anim.mjs`))) (await import(`./${name}.anim.mjs`)).animate(scene);
   const json = JSON.stringify(scene);
   writeFileSync(resolve(here, `${name}.json`), json);
-  const r = await renderLit(scene, 0, { width, debug, baseDir: here });
+  const r = await renderLit(scene, at, { width, debug, baseDir: here });
   writeFileSync(resolve(here, 'out', `${name}.png`), debug ? r.debug : r.png);
   tiles.push(r.image);
   console.log(`${name}: узлов ${scene.nodes.length}, JSON ${(json.length / 1024).toFixed(0)} КБ, рендер ${(r.stats.ms / 1000).toFixed(1)} с (проходы ${(r.stats.passMs / 1000).toFixed(1)} с), треугольников ${r.stats.tris}, ламп ${r.stats.lights}, всего ${((Date.now() - t0) / 1000).toFixed(1)} с`);

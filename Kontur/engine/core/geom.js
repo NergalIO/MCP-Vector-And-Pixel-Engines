@@ -1,6 +1,6 @@
 /** Геометрия: разбор путей, фигуры, морфинг, измерение, деформация.
  * Геометрия = массив подпутей { x0, y0, segs: [[c1x,c1y,c2x,c2y,x,y], ...], closed } */
-import { DEG, TAU, clamp, lerp, noise3, num3, r3 } from './math.js';
+import { DEG, TAU, clamp, lerp, noise3, num3 } from './math.js';
 
 export const lineSeg = (x0, y0, x, y) => [x0 + (x - x0) / 3, y0 + (y - y0) / 3, x0 + (2 * (x - x0)) / 3, y0 + (2 * (y - y0)) / 3, x, y];
 

@@ -192,6 +192,13 @@ export function probeRaster() {
   })();
   return probing;
 }
+/** Принять растеризатор, найденный главным потоком (воркеры пула не перебирают программы заново). */
+export function adoptRaster(name, candidates = {}) {
+  if (probing || !name) return;
+  Object.assign(capabilities.candidates, candidates);
+  capabilities.png = name;
+  probing = Promise.resolve(name);
+}
 export const canPng = () => !!capabilities.png;
 export function rasterHelp() {
   return 'Установите в папке kontur: npm i @resvg/resvg-js (работает на Windows/macOS/Linux без внешних программ), либо librsvg (rsvg-convert), либо ImageMagick 7 (magick).';
@@ -213,6 +220,35 @@ export async function svgToRGBA(svg, width) {
   if (!name) throw new Error(`Нет работающего растеризатора SVG (${capabilities.pngError}). ${rasterHelp()}`);
   if (name === 'resvg-js') { const r = await resvgRender(svg, width); return { width: r.width, height: r.height, data: demultiply(r.pixels) }; }
   return decodePNG(await BACKENDS[name](svg, width));
+}
+
+/**
+ * Растровая картинка (PNG, JPEG, WebP, GIF, AVIF…) → RGBA { width, height, data }; maxW — уменьшить до этой ширины.
+ * PNG декодируется сам; остальное — через ffmpeg (если есть), иначе через растеризатор SVG (resvg читает PNG/JPEG/GIF).
+ */
+export async function decodeImage(buf, maxW = 0) {
+  const shrink = (im) => (maxW && im.width > maxW ? scaleNearestDown(im, maxW) : im);
+  if (isPng(buf)) return shrink(decodePNG(buf));
+  await probeRaster();
+  if (capabilities.ffmpeg) {
+    const vf = maxW ? ['-vf', `scale='min(${maxW},iw)':-2`] : [];
+    const png = await run('ffmpeg', ['-v', 'error', '-i', 'pipe:0', ...vf, '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1'], buf, 60000);
+    return decodePNG(png);
+  }
+  const sz = imageSize(buf);
+  if (!sz) throw new Error('неизвестный формат картинки');
+  const mime = buf[0] === 0xff && buf[1] === 0xd8 ? 'image/jpeg' : buf.toString('ascii', 0, 3) === 'GIF' ? 'image/gif' : 'image/webp';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${sz.width}" height="${sz.height}" viewBox="0 0 ${sz.width} ${sz.height}"><image width="${sz.width}" height="${sz.height}" href="data:${mime};base64,${buf.toString('base64')}"/></svg>`;
+  const im = await svgToRGBA(svg, maxW ? Math.min(maxW, sz.width) : sz.width);
+  let alpha = 0;
+  for (let i = 3; i < im.data.length; i += 4 * 97) alpha |= im.data[i];
+  if (!alpha) throw new Error(`растеризатор ${capabilities.png} не читает ${mime}: поставьте ffmpeg или сохраните картинку в PNG`);
+  return im;
+}
+function scaleNearestDown(img, maxW) {
+  const k = img.width / maxW, w = maxW, h = Math.max(1, Math.round(img.height / k)), data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) data.set(img.data.subarray(((Math.floor(y * k) * img.width) + Math.floor(x * k)) * 4, ((Math.floor(y * k) * img.width) + Math.floor(x * k)) * 4 + 4), (y * w + x) * 4);
+  return { width: w, height: h, data };
 }
 
 /** Обработать список параллельно (не больше limit одновременно), сохраняя порядок результатов. */

@@ -18,7 +18,6 @@ export function camera(cam = {}, W = 1920) {
     pxPerUnit: (Z) => f / (Z + dz),
   };
 }
-const CAM_EXTRA = ['yaw', 'pitch', 'keepVerticals'];
 /** Подбор камеры: рост персонажа charPx у нижнего края кадра (экранная Y = bottom) и горизонт hor. */
 export function fitCamera({ width = 1920, height = 1080, hor = Math.round(height * 0.26), charPx = Math.round(height * 0.3), bottom = height, charH = 1.7, f, dz = 2.5 } = {}) {
   const camH = (charH * (bottom - hor)) / charPx;

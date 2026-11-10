@@ -157,7 +157,7 @@ export function toNodes(S, opts = {}) {
       j = k;
     }
     // элемент без видимых узлов остаётся, только если отбрасывает тень
-    if (nodes.length === at0 + 1 && !ip.occluder) nodes.length = at0;
+    if (nodes.length === at0 + 1 && !ip.occluder && !it.keep) nodes.length = at0;
     if (it.src != null) perItem[it.src] = (perItem[it.src] || 0) + nodes.length - at0;
   }
   if (opts.lights !== false && S.lights.length) {

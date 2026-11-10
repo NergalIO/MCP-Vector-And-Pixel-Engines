@@ -25,7 +25,8 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@resvg/resvg-js": "^2.6.2"
+    "@resvg/resvg-js": "^2.6.2",
+    "webgpu": "^0.6.2"
   },
   "license": "MIT"
 }
