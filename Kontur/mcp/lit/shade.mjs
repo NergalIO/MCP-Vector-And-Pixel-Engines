@@ -6,6 +6,8 @@ import { lampVisibility } from './shadows.mjs';
 import { multiBounce } from './ao.mjs';
 import { clamp01, rgb, lin22 } from './util.mjs';
 import { rows, f32 } from './pool.mjs';
+import { viaGPU } from './gpu.mjs';
+import { gpuShadeSun, gpuLamps } from './gpu-kernels.mjs';
 
 /** Источники для отложенного света: узлы light с p3 (мировые координаты). */
 export function deferredLights(scene, t = 0, states) {
@@ -99,11 +101,15 @@ export function shadeSurface(G, st, { direct, ambient, bvh, scene, t, states, se
   const lampL = separateLamps ? f32(n * 3) : light;
   const specI = st.specular ?? 0.35;
   const H = n / W;
-  if (ambient.params) rows(import.meta.url, kShadeSun, { W, Nx, Ny, Nz, Px, Py, Pz, spec, direct, light, specT, camX, camY, camZ, L, sunC, specI, amb: ambient.params }, H);
+  if (ambient.params) {
+    const args = { W, Nx, Ny, Nz, Px, Py, Pz, spec, direct, light, specT, camX, camY, camZ, L, sunC, specI, amb: ambient.params };
+    viaGPU('shade', n, () => gpuShadeSun(args), () => rows(import.meta.url, kShadeSun, args, H));
+  }
   else kShadeSun({ W, Nx, Ny, Nz, Px, Py, Pz, spec, direct, light, specT, camX, camY, camZ, L, sunC, specI, ambient }, 0, H);
   // точечные источники
   const lights = deferredLights(scene, t, states);
   let litCount = 0, rays = 0;
+  const lamps = []; // { lx, ly, lz, r, lc, rect, vis } — видимость считается здесь, свет — на GPU или полосами пула
   for (const lt of lights) {
     const kk = lampGain(st, lt);
     if (kk <= 0 || !(lt.radius > 0)) continue;
@@ -116,8 +122,12 @@ export function shadeSurface(G, st, { direct, ambient, bvh, scene, t, states, se
     const shadowed = (lt.shadows ?? lt.group === 'lamp') && st.lightShadows && bvh;
     let vis = null;
     if (shadowed) { vis = lampVisibility(G, bvh, lx, ly, lz, r, rect); rays += vis.rays; }
-    rows(import.meta.url, kShadeLamp, { W, ya, xa, xb, lx, ly, lz, r, lc, Nx, Ny, Nz, Px, Py, Pz, spec, camX, camY, camZ, specI, lampL, specT, vis: vis ? vis.data : null, vw: vis?.w, vx0: vis?.x0, vy0: vis?.y0 }, yb - ya + 1);
+    lamps.push({ lx, ly, lz, r, lc, rect, vis });
   }
+  if (lamps.length) viaGPU('lamps', n, () => gpuLamps({ W, H, Nx, Ny, Nz, Px, Py, Pz, spec, lampL, specT, camX, camY, camZ, specI, lamps }), () => {
+    for (const { lx, ly, lz, r, lc, rect: [xa, xb, ya, yb], vis } of lamps)
+      rows(import.meta.url, kShadeLamp, { W, ya, xa, xb, lx, ly, lz, r, lc, Nx, Ny, Nz, Px, Py, Pz, spec, camX, camY, camZ, specI, lampL, specT, vis: vis ? vis.data : null, vw: vis?.w, vx0: vis?.x0, vy0: vis?.y0 }, yb - ya + 1);
+  });
   return { light, specT, lampL, lights, litCount, rays };
 }
 

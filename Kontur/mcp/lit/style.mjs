@@ -8,6 +8,8 @@ import { uniform, gauss, dilate3, splitRGB } from './filters.mjs';
 import { medianCut } from './color.mjs';
 import { clamp01, hash01 } from './util.mjs';
 import { rows, f32 } from './pool.mjs';
+import { viaGPU } from './gpu.mjs';
+import { gpuPaint } from './gpu-kernels.mjs';
 
 const luma = (img, i) => 0.299 * img[i * 3] + 0.587 * img[i * 3 + 1] + 0.114 * img[i * 3 + 2];
 
@@ -63,7 +65,8 @@ const STYLES = {
     const pts = [];
     for (const [rr, cnt] of [[0.35, 8], [0.68, 12], [1, 16]]) for (let j = 0; j < cnt; j++) { const a = ((j + 0.5) / cnt) * 6.2831853; pts.push([rr * Math.cos(a), rr * Math.sin(a), Math.floor((a / 6.2831853) * 8) & 7]); }
     const out = f32(n * 3);
-    rows(import.meta.url, kPaint, { W, H, R, q, alpha, Es, Fs, Gs, img, out, pts }, H);
+    const args = { W, H, R, q, alpha, Es, Fs, Gs, img, out, pts };
+    viaGPU('paint', n, () => gpuPaint(args), () => rows(import.meta.url, kPaint, args, H));
     return out;
   },
 

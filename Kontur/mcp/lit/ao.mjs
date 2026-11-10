@@ -7,6 +7,8 @@
 import { gauss, bilateral, zoom2 } from './filters.mjs';
 import { clamp01, pyRound, hash01 } from './util.mjs';
 import { rows, f32, u8 } from './pool.mjs';
+import { viaGPU } from './gpu.mjs';
+import { gpuGtao, gpuSsao } from './gpu-kernels.mjs';
 
 /** Прежний SSAO: Float32 n (1 — открыто). */
 export function ssao(G, o) {
@@ -26,7 +28,8 @@ export function ssao(G, o) {
     }
   }
   const cnt = offs.length / 2;
-  rows(import.meta.url, kSsao, { hw, hh, hx, hy, hz, hnx, hny, hnz, occA, rad, offs }, hh);
+  const sargs = { hw, hh, hx, hy, hz, hnx, hny, hnz, occA, rad, offs };
+  viaGPU('ao', hn, () => gpuSsao(sargs), () => rows(import.meta.url, kSsao, sargs, hh));
   const aoH = f32(hn);
   for (let j = 0; j < hn; j++) aoH[j] = 1 - clamp01((occA[j] / cnt) * 2.6);
   const ao = zoom2(gauss(aoH, hw, hh, 1.2), hw, hh, W, H);
@@ -51,7 +54,8 @@ export function gtao(G, o) {
   const vis = f32(hn).fill(1);
   const wantBent = o.bent !== false;
   const bx = wantBent ? f32(hn) : null, by = wantBent ? f32(hn) : null, bz = wantBent ? f32(hn) : null;
-  rows(import.meta.url, kGtao, { hw, hh, hm, hx, hy, hz, hnx, hny, hnz, hD, vis, bx, by, bz, wantBent, rad, dirs, steps, fall0, bias, fHalf, maxPx }, hh);
+  const gargs = { hw, hh, hm, hx, hy, hz, hnx, hny, hnz, hD, vis, bx, by, bz, wantBent, rad, dirs, steps, fall0, bias, fHalf, maxPx };
+  viaGPU('ao', hn, () => gpuGtao(gargs), () => rows(import.meta.url, kGtao, gargs, hh));
   const sc = Math.max(1, hw / 960), sig = (o.denoise ?? 1) * 1.6 * sc;
   const up = (a) => zoom2(bilateral(a, hw, hh, sig, hD, hnx, hny, hnz, hm), hw, hh, W, H);
   const ao = up(vis), s = o.strength ?? 1, chm = G.chm;

@@ -1,10 +1,15 @@
 // Постобработка HDR (до тонмаппинга): глубина резкости, bloom, автоэкспозиция.
-import { gauss } from './filters.mjs';
+import { gauss, gaussKernel } from './filters.mjs';
+import { viaGPU } from './gpu.mjs';
+import { gpuBloom } from './gpu-post.mjs';
 import { clamp01, Y3 } from './util.mjs';
 
 /** Bloom (на месте): яркое выше threshold и свечение размываются тремя радиусами и добавляются. */
 export function bloom(G, col, emL, strength, threshold) {
   const { W, H, n } = G;
+  viaGPU('post', n, () => gpuBloom(col, emL, W, H, strength, threshold, gaussKernel), () => bloomCPU(W, H, n, col, emL, strength, threshold));
+}
+function bloomCPU(W, H, n, col, emL, strength, threshold) {
   const br = [0, 1, 2].map(() => new Float32Array(n));
   for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) br[c][i] = Math.max(0, col[i * 3 + c] - threshold) + emL[i * 3 + c] * 0.6;
   for (const [s, wgt] of [[4, 0.5], [14, 0.35], [40, 0.25]]) for (let c = 0; c < 3; c++) {

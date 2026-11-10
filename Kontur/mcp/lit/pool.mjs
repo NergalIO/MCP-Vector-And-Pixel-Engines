@@ -25,6 +25,14 @@ export const sharedCopy = (a) => { const s = alloc(a.constructor, a.length); s.s
 const isShared = (v) => SAB && v.buffer instanceof SAB;
 
 /* ---------------- воркеры ---------------- */
+/**
+ * Флаги Node для воркеров: undefined — унаследовать как есть; если среди флагов процесса есть относящиеся только к
+ * коду из строки (node --input-type -e), — те же без них (явный список Node проверяет строже, поэтому только в этом случае).
+ */
+export const workerExecArgv = () => {
+  const keep = process.execArgv.filter((a) => !/^--(input-type|eval|print)\b/.test(a));
+  return keep.length === process.execArgv.length ? undefined : keep;
+};
 let workers = null;
 const pending = new Map();
 let taskSeq = 0;
@@ -33,7 +41,7 @@ function ensure() {
   if (workers || !POOL) return;
   workers = [];
   for (let k = 0; k < THREADS - 1; k++) {
-    const w = new Worker(new URL('./worker.mjs', import.meta.url));
+    const w = new Worker(new URL('./worker.mjs', import.meta.url), { execArgv: workerExecArgv() });
     w.busy = 0;
     w.on('message', (m) => {
       const p = pending.get(m.id);

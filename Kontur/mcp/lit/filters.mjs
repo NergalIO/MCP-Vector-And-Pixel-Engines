@@ -1,7 +1,9 @@
 // Фильтры полей (Float32, один канал w×h): гаусс, совместный билатеральный, окно, расширение, масштабирование.
 // Граница — reflect, как у scipy.ndimage (перенос эскизов render.py без смены кадра).
-// Гаусс и билатеральный считаются полосами строк на всех ядрах (pool.mjs).
+// Гаусс и билатеральный считаются полосами строк на всех ядрах (pool.mjs) или на видеокарте (KONTUR_GPU, gpu.mjs).
 import { rows, f32 } from './pool.mjs';
+import { viaGPU } from './gpu.mjs';
+import { gpuGauss, gpuBilateral } from './gpu-kernels.mjs';
 
 export const gaussKernel = (s) => {
   const r = Math.max(1, Math.round(4 * s)), k = new Float32Array(2 * r + 1);
@@ -22,10 +24,13 @@ export function gauss(src, w, h, s) {
     for (let j = 0; j < small.length; j++) small[j] /= cnt[j] || 1;
     return upF(gauss(small, sw, sh, s / f), sw, sh, f, w, h);
   }
-  const { k, r } = gaussKernel(s), tmp = f32(w * h), out = f32(w * h);
-  rows(import.meta.url, kGaussH, { src, tmp, w, k, r }, h);
-  rows(import.meta.url, kGaussV, { tmp, out, w, h, k, r }, h);
-  return out;
+  const { k, r } = gaussKernel(s);
+  return viaGPU('filters', w * h, () => gpuGauss(src, w, h, k, r), () => {
+    const tmp = f32(w * h), out = f32(w * h);
+    rows(import.meta.url, kGaussH, { src, tmp, w, k, r }, h);
+    rows(import.meta.url, kGaussV, { tmp, out, w, h, k, r }, h);
+    return out;
+  });
 }
 /** Полоса строк y0…y1 горизонтального прохода гаусса. */
 export function kGaussH({ src, tmp, w, k, r }, y0, y1) {
@@ -55,10 +60,13 @@ export function kGaussV({ tmp, out, w, h, k, r }, y0, y1) {
  */
 export function bilateral(src, w, h, s, D, nx, ny, nz, m) {
   if (!(s > 0)) return src;
-  const { k, r } = gaussKernel(s), tmp = f32(w * h), out = f32(w * h);
-  rows(import.meta.url, kBilateral, { a: src, out: tmp, w, h, k, r, D, nx, ny, nz, m, dx: 1 }, h);
-  rows(import.meta.url, kBilateral, { a: tmp, out, w, h, k, r, D, nx, ny, nz, m, dx: 0 }, h);
-  return out;
+  const { k, r } = gaussKernel(s);
+  return viaGPU('filters', w * h, () => gpuBilateral(src, w, h, k, r, D, nx, ny, nz, m), () => {
+    const tmp = f32(w * h), out = f32(w * h);
+    rows(import.meta.url, kBilateral, { a: src, out: tmp, w, h, k, r, D, nx, ny, nz, m, dx: 1 }, h);
+    rows(import.meta.url, kBilateral, { a: tmp, out, w, h, k, r, D, nx, ny, nz, m, dx: 0 }, h);
+    return out;
+  });
 }
 /** Полоса строк y0…y1 прохода билатерального фильтра (dx: 1 — по x, 0 — по y). */
 export function kBilateral({ a, out, w, h, k, r, D, nx, ny, nz, m, dx }, y0, y1) {

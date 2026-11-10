@@ -4,6 +4,8 @@ import { gauss, bilateral, zoom2 } from './filters.mjs';
 import { nz, hash01, clamp01 } from './util.mjs';
 import { rows, f32, u8 } from './pool.mjs';
 import { bvhFromData } from '../bvh.mjs';
+import { viaGPU } from './gpu.mjs';
+import { gpuSun } from './gpu-kernels.mjs';
 
 /** Окклюдеры сцены: props.occluder {box, boxes, tris, alpha} у видимых узлов. */
 export function occluders(scene) {
@@ -34,7 +36,7 @@ export function sunShadows(G, sun, bvh) {
   const sunAngle = Math.max(0, sun.angle || 0);
   const base = { W, hw, mask, PNx, PNy, PNz, Px, Py, Pz, L, shH, bvh: bvh?.data };
   if (!(sunAngle > 0)) {
-    if (sun.shadows !== false && bvh) rays = rows(import.meta.url, kSunHard, base, hh);
+    if (sun.shadows !== false && bvh) rays = viaGPU('sun', hn, () => { gpuSun({ ...base, soft: false }); return litCount(base, hh); }, () => rows(import.meta.url, kSunHard, base, hh));
     return { shadow: zoom2(gauss(shH, hw, hh, 0.9), hw, hh, W, H), rays };
   }
   const half = ((sunAngle * Math.PI) / 180) / 2, tanH = Math.tan(half);
@@ -44,7 +46,10 @@ export function sunShadows(G, sun, bvh) {
     const i = 2 * y * W + 2 * x, j = y * hw + x;
     hm[j] = mask[i]; hD[j] = Dp[i]; hx[j] = PNx[i]; hy[j] = PNy[i]; hz[j] = PNz[i];
   }
-  if (sun.shadows !== false && bvh) rays = rows(import.meta.url, kSunSoft, { ...base, Dp, T1, T2, tanH, f, pen }, hh);
+  if (sun.shadows !== false && bvh) {
+    const sargs = { ...base, Dp, T1, T2, tanH, f, pen };
+    rays = viaGPU('sun', hn, () => { gpuSun({ ...sargs, soft: true }); return litCount(base, hh); }, () => rows(import.meta.url, kSunSoft, sargs, hh));
+  }
   // ширина полутени — и на освещённые соседние пиксели (нормированное размытие по затенённым)
   const occF = f32(hn);
   for (let j = 0; j < hn; j++) if (!shH[j]) occF[j] = 1;
@@ -63,6 +68,8 @@ const bvhCache = new WeakMap();
 /** Обход BVH по массивам data (в воркере собирается один раз на задание). */
 const bvhOf = (data) => { let b = bvhCache.get(data); if (!b) { b = bvhFromData(data); bvhCache.set(data, b); } return b; };
 const litPx = (i, mask, PNx, PNy, PNz, L) => mask[i] && PNx[i] * L[0] + PNy[i] * L[1] + PNz[i] * L[2] > -0.05;
+/** Число лучей солнца (освещённые точки половинной сетки) — для статистики, когда лучи считает GPU. */
+const litCount = ({ W, hw, mask, PNx, PNy, PNz, L }, hh) => { let c = 0; for (let y = 0; y < hh; y++) for (let x = 0; x < hw; x++) if (litPx(2 * y * W + 2 * x, mask, PNx, PNy, PNz, L)) c++; return c; };
 
 /** Полоса строк y0…y1 половинной сетки: резкая тень солнца (луч к солнцу). Возвращает число лучей. */
 export function kSunHard({ W, hw, mask, PNx, PNy, PNz, Px, Py, Pz, L, shH, bvh: data }, y0, y1) {

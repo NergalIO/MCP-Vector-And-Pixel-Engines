@@ -4,6 +4,8 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { decodeImage } from '../render.mjs';
 import { clamp01 } from './util.mjs';
+import { viaGPU } from './gpu.mjs';
+import { gpuTonemap, gpuMatch, gpuGrade } from './gpu-post.mjs';
 
 /* ============================== тонмаппинг ============================== */
 export const acesC = (x) => clamp01((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14));
@@ -41,6 +43,7 @@ export function hueTonemap(r, g, b, out) {
 export function tonemapFrame(col, n, { exposure = 1, tonemap = 'aces', saturation = 1 } = {}) {
   const img = new Float32Array(n * 3);
   const tmo = tonemap === 'agx' || tonemap === 'hue' ? tonemap : null, px3 = [0, 0, 0], exp = exposure, sat = saturation;
+  if (viaGPU('post', n, () => (gpuTonemap(col, img, n, { exposure, tonemap, saturation }), true), () => false)) return { img, tonemap: tmo };
   for (let i = 0; i < n; i++) {
     let s = 0;
     if (tmo) {
@@ -130,6 +133,7 @@ export function matchPalette(img, n, ref, o = {}) {
   const step = Math.max(1, Math.floor(n / 150000));
   const src = labStats(n, (i, out) => { out[0] = img[i * 3]; out[1] = img[i * 3 + 1]; out[2] = img[i * 3 + 2]; }, step);
   const kL = Math.min(1.6, Math.max(0.6, ref.stdL / src.stdL)), kC = 1 + (Math.min(1.6, Math.max(0.6, ref.stdC / src.stdC)) - 1) * wc;
+  if (viaGPU('post', n, () => (gpuMatch(img, n, { src, ref, amt, wl, kL, kC, zones }), true), () => false)) return { src, ref };
   const q = [0, 0, 0], w = [0, 0, 0], w2 = [0, 0, 0], out = [0, 0, 0];
   for (let i = 0; i < n; i++) {
     const j = i * 3;
@@ -189,6 +193,7 @@ function lutSample(lut, r, g, b, out) {
 export function applyGrade(g, img, n, baseDir) {
   const { lift, gamma, gain } = g, sp = g.split, con = g.contrast ?? 1;
   const lut = g.lut ? loadCube(g.lut, baseDir) : null, la = g.lutAmount ?? 1, tmp = [0, 0, 0];
+  if (!lut && viaGPU('post', n, () => (gpuGrade(img, n, g), true), () => false)) return; // с LUT — здесь
   const lum3 = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
   const shL = sp ? lum3(sp.shadows) : 0, hiL = sp ? lum3(sp.highlights) : 0;
   for (let i = 0; i < n; i++) {

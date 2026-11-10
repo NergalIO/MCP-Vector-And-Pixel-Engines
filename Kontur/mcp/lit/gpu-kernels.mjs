@@ -292,7 +292,7 @@ fn trav(o: vec3f, d: vec3f, tmax: f32, any: bool, seed: u32) -> f32 {
 /** Лучи теней солнца (kSunHard / kSunSoft) по массивам BVH (bvh.data). soft: T1, T2, tanH, f, pen. */
 export function gpuSun({ W, hw, mask, PNx, PNy, PNz, Px, Py, Pz, Dp, L, shH, bvh, soft, T1 = [0, 0, 0], T2 = [0, 0, 0], tanH = 0, f = 0, pen }) {
   const hh = shH.length / hw, dummy = { bytes: 16 };
-  gpuExec({ key: 'sun', code: SUN, bufs: [{ data: mask }, { data: PNx }, { data: PNy }, { data: PNz }, { data: Px }, { data: Py }, { data: Pz }, { data: Dp },
+  gpuExec({ key: 'sun', code: SUN, bufs: [{ data: mask }, { data: PNx }, { data: PNy }, { data: PNz }, { data: Px }, { data: Py }, { data: Pz }, Dp ? { data: Dp } : dummy,
     { data: shH, io: 'inout' }, soft ? { data: pen, io: 'inout' } : dummy, { data: bvh.T }, { data: bvh.A }, { data: bvh.B }, { data: bvh.idx }, { data: bvh.NB }, { data: bvh.NC }], passes: [
     { entry: 'main', uni: uniforms([['u', W], ['u', hw], ['u', hh], ['u', bvh.nt], ['u', bvh.n], ['u', soft ? 1 : 0], ['f', L[0]], ['f', L[1]], ['f', L[2]],
       ['f', T1[0]], ['f', T1[1]], ['f', T1[2]], ['f', T2[0]], ['f', T2[1]], ['f', T2[2]], ['f', tanH], ['f', f]]), bind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], groups: groups2(hw, hh) },
@@ -384,5 +384,61 @@ export function gpuPaint({ W, H, R, q, alpha, Es, Fs, Gs, img, out, pts }) {
   pts.forEach((t, k) => { P[k * 3] = t[0]; P[k * 3 + 1] = t[1]; P[k * 3 + 2] = t[2]; });
   gpuExec({ key: 'paint', code: PAINT, bufs: [{ data: Es }, { data: Fs }, { data: Gs }, { data: img }, { data: out, io: 'out' }, { data: P }], passes: [
     { entry: 'main', uni: uniforms([['u', W], ['u', H], ['u', pts.length], ['f', R], ['f', q], ['f', alpha]]), bind: [0, 1, 2, 3, 4, 5], groups: groups2(W, H) },
+  ] });
+}
+
+/* ---------------- лампы: свет и блик всех точечных источников ---------------- */
+// Запись лампы (LREC чисел): lx, ly, lz, r, lc0, lc1, lc2, xa, xb, ya, yb, visOff, vw, vx0, vy0, hasVis
+const LREC = 16;
+const LAMPS = COMMON + /* wgsl */ `
+struct U { W: u32, H: u32, nl: u32, specI: f32, camX: f32, camY: f32, camZ: f32 }
+@group(0) @binding(0) var<uniform> p: U;
+${binds([['Nx'], ['Ny'], ['Nz'], ['Px'], ['Py'], ['Pz'], ['spec'], ['lampL', 'f32', true], ['specT', 'f32', true], ['Ls'], ['vis']])}
+@compute @workgroup_size(16, 16) fn main(@builtin(global_invocation_id) g: vec3u) {
+  if (g.x >= p.W || g.y >= p.H) { return; }
+  let i = g.y * p.W + g.x; let fx = f32(g.x); let fy = f32(g.y);
+  let P = vec3f(Px[i], Py[i], Pz[i]); let N = vec3f(Nx[i], Ny[i], Nz[i]);
+  var vv3 = vec3f(p.camX, p.camY, p.camZ) - P;
+  let vl = length(vv3) + 1e-6; vv3 = vv3 / vl;
+  var L = vec3f(lampL[i * 3u], lampL[i * 3u + 1u], lampL[i * 3u + 2u]);
+  var S = vec3f(specT[i * 3u], specT[i * 3u + 1u], specT[i * 3u + 2u]);
+  var hit = false;
+  for (var k = 0u; k < p.nl; k++) {
+    let b = k * ${LREC}u;
+    if (fx < Ls[b + 7u] || fx > Ls[b + 8u] || fy < Ls[b + 9u] || fy > Ls[b + 10u]) { continue; }
+    let dd = vec3f(Ls[b], Ls[b + 1u], Ls[b + 2u]) - P; let r = Ls[b + 3u];
+    let dist = length(dd) + 1e-4;
+    if (dist >= r) { continue; }
+    let ld = dd / dist;
+    let q = 1.0 - (dist / r) * (dist / r); let att = q * q;
+    let nd = clamp(dot(N, ld), 0.0, 1.0);
+    var vis1 = 1.0;
+    if (Ls[b + 15u] != 0.0) { vis1 = vis[u32(Ls[b + 11u]) + u32(fy - Ls[b + 14u]) * u32(Ls[b + 12u]) + u32(fx - Ls[b + 13u])]; }
+    let hv = ld + vv3; let hl = length(hv) + 1e-6;
+    let sp = pow(clamp(dot(N, hv) / hl, 0.0, 1.0), 30.0) * spec[i] * att * vis1 * p.specI;
+    let lc = vec3f(Ls[b + 4u], Ls[b + 5u], Ls[b + 6u]);
+    L += nd * att * vis1 * lc; S += sp * lc; hit = true;
+  }
+  if (!hit) { return; }
+  lampL[i * 3u] = L.x; lampL[i * 3u + 1u] = L.y; lampL[i * 3u + 2u] = L.z;
+  specT[i * 3u] = S.x; specT[i * 3u + 1u] = S.y; specT[i * 3u + 2u] = S.z;
+}`;
+/**
+ * Все лампы (kShadeLamp) одним заданием: lamps — [{ lx, ly, lz, r, lc, rect: [xa, xb, ya, yb], vis: { data, w, x0, y0 } | null }],
+ * свет — в lampL, блик — в specT (n·3, на месте).
+ */
+export function gpuLamps({ W, H, Nx, Ny, Nz, Px, Py, Pz, spec, lampL, specT, camX, camY, camZ, specI, lamps }) {
+  const Ls = new Float32Array(Math.max(1, lamps.length) * LREC);
+  let vn = 0;
+  for (const l of lamps) if (l.vis) vn += l.vis.data.length;
+  const vis = new Float32Array(Math.max(4, vn));
+  vn = 0;
+  lamps.forEach((l, k) => {
+    const b = k * LREC;
+    Ls.set([l.lx, l.ly, l.lz, l.r, l.lc[0], l.lc[1], l.lc[2], ...l.rect], b);
+    if (l.vis) { Ls.set([vn, l.vis.w, l.vis.x0, l.vis.y0, 1], b + 11); vis.set(l.vis.data, vn); vn += l.vis.data.length; }
+  });
+  gpuExec({ key: 'lamps', code: LAMPS, bufs: [{ data: Nx }, { data: Ny }, { data: Nz }, { data: Px }, { data: Py }, { data: Pz }, { data: spec }, { data: lampL, io: 'inout' }, { data: specT, io: 'inout' }, { data: Ls }, { data: vis }], passes: [
+    { entry: 'main', uni: uniforms([['u', W], ['u', H], ['u', lamps.length], ['f', specI], ['f', camX], ['f', camY], ['f', camZ]]), bind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], groups: groups2(W, H) },
   ] });
 }

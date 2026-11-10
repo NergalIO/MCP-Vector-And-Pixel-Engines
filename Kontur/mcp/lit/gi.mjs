@@ -4,6 +4,8 @@
 import { bilateral, zoom2 } from './filters.mjs';
 import { hash01 } from './util.mjs';
 import { rows, f32, u8 } from './pool.mjs';
+import { viaGPU } from './gpu.mjs';
+import { gpuGather } from './gpu-kernels.mjs';
 
 /** Добавить отражённый свет в light (на месте). ambient(i, c) — окружающая часть light (её не отражаем). */
 export function screenGI(G, gi, { light, lampL, lin, ao, ambient }) {
@@ -26,7 +28,8 @@ export function screenGI(G, gi, { light, lampL, lin, ao, ambient }) {
   const kk = (gi.strength * 2.4) / taps;
   const gather = (src, salt) => {
     const out = [f32(hn), f32(hn), f32(hn)];
-    rows(import.meta.url, kGather, { hw, hh, hm, hx, hy, hz, hnx, hny, hnz, src, out, radii, dirs, kk, salt, rad }, hh);
+    const args = { hw, hh, hm, hx, hy, hz, hnx, hny, hnz, src, out, radii, dirs, kk, salt, rad };
+    viaGPU('gi', hn, () => gpuGather(args), () => rows(import.meta.url, kGather, args, hh));
     return out;
   };
   const acc = gather(radc, 0);

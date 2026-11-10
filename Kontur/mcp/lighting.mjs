@@ -26,6 +26,7 @@ import { bloom, depthOfField, autoExposure } from './lit/post.mjs';
 import { tonemapFrame, matchPalette, loadRefStats, applyGrade } from './lit/color.mjs';
 import { applyStyle } from './lit/style.mjs';
 import { f32, warm, task, POOL, THREADS } from './lit/pool.mjs';
+import { initGPU, gpuInfo } from './lit/gpu.mjs';
 
 export { LIGHT_PRESETS, STYLE_TYPES, TONEMAPS, resolveLighting, resolveStyle, effectsSummary } from './lit/params.mjs';
 export { gauss } from './lit/filters.mjs';
@@ -75,6 +76,13 @@ export async function passTask({ scene, sceneJSON, t, width, states, raw, mode, 
   return { result: png, transfer: [png.buffer] };
 }
 
+/** Для stats: { gpu: имя адаптера } или { gpu: false, gpuError } (только если KONTUR_GPU включён). */
+function gpuStats() {
+  const g = gpuInfo();
+  if (!g.wanted.length) return {};
+  return g.adapter && !g.failure ? { gpu: g.adapter.device, gpuStages: g.wanted } : { gpu: false, gpuError: g.failure || 'нет адаптера' };
+}
+
 /* ============================== кадр ============================== */
 /**
  * Кадр с отложенным светом. Возвращает { png, image, debug? (PNG листа «цвет / нормали / тени+AO / итог»), shadowAO?, stats }.
@@ -92,7 +100,9 @@ export async function renderLit(scene, t = 0, opts = {}) {
   const chrTag = st.characters.tag;
   const mats = needsMatId(scene) ? prepareMaterials(scene) : [];
   warm(KERNEL_MODS); // воркеры пула стартуют и грузят этапы, пока идут проходы
+  const gpuReady = initGPU(); // KONTUR_GPU: устройство поднимается параллельно с проходами
   const pngs = opts.passes || await renderPasses(scene, t, { width: W, states: opts.states, masks: [chrTag], raw: true });
+  await gpuReady;
   const tPass = Date.now();
   const { stages, lap } = stageTimer();
 
@@ -183,7 +193,7 @@ export async function renderLit(scene, t = 0, opts = {}) {
     ...(P ? { paint: true } : {}), ...(AE ? { aerial: true } : {}), ...(tmo ? { tonemap: tmo } : {}), ...(st.grade?.matchRef ? { matchRef: st.grade.matchRef.src } : {}),
     ...(st.ao?.mode === 'gtao' ? { ao: 'gtao' } : {}), ...(contact ? { contactShadows: true } : {}), ...(st.gi?.bounces > 1 ? { giBounces: st.gi.bounces } : {}),
     ...(dofInfo ? { dofFocus: +dofInfo.focus.toFixed(2) } : {}), ...(aeInfo ? { autoExposure: +aeInfo.k.toFixed(3) } : {}),
-    effects: effectsSummary(st), passMs: tPass - t0, stageMs: stages, ms: Date.now() - t0 } };
+    ...gpuStats(), effects: effectsSummary(st), passMs: tPass - t0, stageMs: stages, ms: Date.now() - t0 } };
   if (opts.debug) {
     const so = new Uint8Array(n * 4);
     for (let i = 0; i < n; i++) { const v = Math.round(clamp01(shadow[i] * ao[i]) * 255); so[i * 4] = so[i * 4 + 1] = so[i * 4 + 2] = v; so[i * 4 + 3] = 255; }

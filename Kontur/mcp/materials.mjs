@@ -6,6 +6,8 @@ import { resolve } from 'node:path';
 import { noise3, parseColor, surfaceAxes } from '../engine/kontur.js';
 import { decodePNG } from './normals.mjs';
 import { rows, f32 } from './lit/pool.mjs';
+import { viaGPU } from './lit/gpu.mjs';
+import { gpuMaterials, gpuMaterialsOK } from './lit/gpu-materials.mjs';
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const lin22 = (v) => Math.pow(Math.max(0, v), 2.2);
@@ -158,6 +160,12 @@ export function prepareMaterials(scene) {
 export function applyMaterials(mats, { W, H, mid, lin, Nx, Ny, Nz, PNx, PNy, PNz, Px, Py, Pz, ao, baseDir, filter = true }) {
   if (!mats.length) return 0;
   const n = W * H;
+  // KONTUR_GPU: процедурные материалы — на видеокарте (кривизна для износа тоже); картиночные фактуры — здесь
+  if (gpuMaterialsOK(mats)) {
+    const args = { W, H, mid, lin, Nx, Ny, Nz, PNx, PNy, PNz, Px, Py, Pz, ao, filter };
+    const r = viaGPU('materials', n, () => gpuMaterials(mats, args, (t) => texMean(t, baseDir), (t) => texDetail(t, baseDir)), () => null);
+    if (r != null) return r;
+  }
   // кривизна по проходу нормалей (для износа рёбер)
   const needWear = mats.some((m) => m.wear);
   let curv = null;

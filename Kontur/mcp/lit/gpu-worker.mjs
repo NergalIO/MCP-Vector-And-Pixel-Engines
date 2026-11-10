@@ -58,7 +58,7 @@ async function run(job) {
     });
     const enc = device.createCommandEncoder();
     for (const p of passes) {
-      const pipe = pipeline(key, code, p.entry);
+      const pipe = pipeline(p.key || key, p.code || code, p.entry); // проход может взять свой шейдер
       const entries = [];
       if (p.uni) {
         const u = device.createBuffer({ size: pad4(p.uni.byteLength), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
