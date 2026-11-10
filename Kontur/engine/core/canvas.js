@@ -6,6 +6,7 @@
  * Ограничение отката: картинки по внешним URL внутри такого поддерева не видны (SVG как изображение их не грузит).
  */
 import { parseColor } from './color.js';
+import { BoundedCache } from './cache.js';
 import { IDENTITY, defsOf, matMul, parseTransform, urlRef } from './ir.js';
 import { treeToString } from './svg.js';
 
@@ -21,7 +22,7 @@ export class CanvasRenderer {
   constructor(container, opts = {}) {
     this.el = container;
     this.opts = opts;
-    this.paths = new Map();
+    this.paths = new BoundedCache(8000);
     this.images = new Map();
     this.fallbacks = new Map();
     this.lastFallback = new Map();
@@ -41,7 +42,7 @@ export class CanvasRenderer {
   /** Path2D по строке d (кэш). */
   path(d) {
     let p = this.paths.get(d);
-    if (!p) { if (this.paths.size > 8000) this.paths.clear(); p = new Path2D(d); this.paths.set(d, p); }
+    if (!p) { p = new Path2D(d); this.paths.set(d, p); }
     return p;
   }
   render(tree, player) {

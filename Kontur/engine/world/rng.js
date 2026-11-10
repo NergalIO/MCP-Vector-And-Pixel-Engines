@@ -1,7 +1,10 @@
 // Kontur world3d — Детерминированная случайность (Парк — Миллер): общий поток, подсиды hashSeed, withSeed.
 
+import { makeRng, pmStep } from '../kontur.js';
+
+export { makeRng };
 let seed = 1;
-export const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+export const rnd = () => (seed = pmStep(seed)) / 2147483647;
 export const reseed = (s) => { seed = Math.max(1, Math.round(s) % 2147483647); };
 /**
  * Выполнить fn с последовательностью ГСЧ от сида s и вернуть прежнее состояние после: вложенные и

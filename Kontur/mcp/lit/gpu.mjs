@@ -6,7 +6,7 @@
 // (после первой ошибки GPU выключается до конца процесса, причина — в gpuInfo()). GPU считает во float32: кадр
 // отличается от процессорного в пределах округления (единицы уровней яркости у редких пикселей).
 import { Worker, isMainThread } from 'node:worker_threads';
-import { workerExecArgv } from './pool.mjs';
+import { workerExecArgv, rows } from './pool.mjs';
 
 const STAGES = ['filters', 'ao', 'gi', 'sun', 'shade', 'lamps', 'materials', 'post', 'paint'];
 const env = String(process.env.KONTUR_GPU ?? '').trim().toLowerCase();
@@ -55,27 +55,71 @@ const SAB = SharedArrayBuffer;
 /**
  * Выполнить задание на GPU синхронно. job: { key (кеш шейдера), code (WGSL),
  * bufs: [{ data: TypedArray, io?: 'in' | 'out' | 'inout' } | { bytes } (временный буфер только на GPU)],
- * passes: [{ entry, uni?: ArrayBuffer, bind: [номера bufs → binding 1, 2, …], groups: [x, y, z], key?, code? (свой шейдер прохода) }] }.
+ * passes: [{ entry, uni?: ArrayBuffer, bind?: [номера bufs → binding 1, 2, …] (по умолчанию все bufs по порядку), groups: [x, y, z], key?, code? (свой шейдер прохода) }] }.
  * 'in' (по умолчанию) — только загрузить, 'out' — только прочитать обратно (буфер на GPU начинается с нулей),
  * 'inout' — и то и другое. Массивы не в общей памяти копируются туда (и обратно, если читаются).
  */
 export function gpuExec({ key, code, bufs, passes }) {
+  const t0 = performance.now();
+  try { gpuExecRaw({ key, code, bufs, passes }); } finally {
+    const s = jobStats.get(key) || { n: 0, ms: 0 };
+    s.n++; s.ms += performance.now() - t0;
+    jobStats.set(key, s);
+  }
+}
+const jobStats = new Map();
+/** Время заданий GPU по ключам шейдеров с прошлого вызова: { key: { n, ms } } (и сброс). */
+export function gpuJobStats() {
+  const o = Object.fromEntries([...jobStats].map(([k, s]) => [k, { n: s.n, ms: Math.round(s.ms) }]));
+  jobStats.clear();
+  return o;
+}
+function gpuExecRaw({ key, code, bufs, passes }) {
   const back = [];
   const b2 = bufs.map((b) => {
     if (!b.data) return { bytes: b.bytes };
     const io = b.io || 'in', rd = io !== 'in';
+    const res = resident.get(b.data);
+    if (res && io === 'in') return { data: res.d, up: true, read: false, rid: res.rid };
+    if (res) { resident.delete(b.data); worker.postMessage({ type: 'release', ids: [res.rid] }); } // массив меняется — больше не резидентный
     let d = b.data;
     if (!(d.buffer instanceof SAB)) { const s = new d.constructor(new SAB(Math.max(4, d.byteLength))).subarray(0, d.length); if (io !== 'out') s.set(d); if (rd) back.push([b.data, s]); d = s; }
     return { data: d, up: io !== 'out', read: rd };
   });
   const ctrl = new Int32Array(new SAB(4)), err = new Uint8Array(new SAB(1024));
   worker.ref();
-  worker.postMessage({ ctrl, err, key, code, bufs: b2, passes });
+  const all = bufs.map((_, k) => k);
+  worker.postMessage({ ctrl, err, key, code, bufs: b2, passes: passes.map((p) => (p.bind ? p : { ...p, bind: all })) });
   const r = Atomics.wait(ctrl, 0, 0, 120000);
   worker.unref();
   if (r === 'timed-out') { failure = `${key}: GPU не ответил за 2 минуты`; throw new Error(failure); }
   if (ctrl[0] === 2) { failure = `${key}: ${new TextDecoder().decode(err).replace(/\0+$/, '')}`; throw new Error(failure); }
   for (const [o, s] of back) o.set(s);
+}
+
+/*
+ * Резидентные массивы: неизменные до конца кадра входы (позиции, нормали плоскостей, глубина, маска, половинные поля)
+ * этапы грузили каждый заново — 3–4 раза за кадр. Помеченный массив грузится на GPU один раз и остаётся там до
+ * gpuReleaseResident (конец кадра). Массив вне общей памяти копируется в неё один раз. Массив, отданный заданию
+ * на запись ('out'/'inout'), перестаёт быть резидентным.
+ */
+const resident = new Map(); // TypedArray → { rid, d (он же или копия в общей памяти) }
+let ridNext = 1;
+/** Пометить массивы неизменными до конца кадра (без GPU — ничего). */
+export function gpuResident(...arrs) {
+  if (!info || failure) return;
+  for (const a of arrs) {
+    if (!a || resident.has(a)) continue;
+    let d = a;
+    if (!(a.buffer instanceof SAB)) { d = new a.constructor(new SAB(Math.max(4, a.byteLength))).subarray(0, a.length); d.set(a); }
+    resident.set(a, { rid: ridNext++, d });
+  }
+}
+/** Конец кадра: отпустить резидентные буферы (в пул GPU-потока). */
+export function gpuReleaseResident() {
+  if (!resident.size) return;
+  if (worker) worker.postMessage({ type: 'release', ids: [...resident.values()].map((r) => r.rid) });
+  resident.clear();
 }
 
 /**
@@ -91,6 +135,11 @@ export function viaGPU(stage, n, gpu, cpu) {
   }
 }
 
+/** Этап на GPU, а без него — ядро kernel полосами строк на пуле (rows): частый вид viaGPU. */
+export const viaRows = (stage, n, gpu, modUrl, kernel, args, nRows) => viaGPU(stage, n, gpu, () => rows(modUrl, kernel, args, nRows));
+/** Попробовать этап на GPU: true — посчитан там, false — считать на процессоре (вызывающий сам). */
+export const tryGPU = (stage, n, gpu) => viaGPU(stage, n, () => (gpu(), true), () => false);
+
 /** Упаковка uniform: поля по 4 байта подряд (u — u32, i — i32, f — f32), как структура WGSL из скаляров. */
 export function uniforms(fields) {
   const n = Math.max(4, Math.ceil(fields.length / 4) * 4), dv = new DataView(new ArrayBuffer(n * 4));
@@ -99,3 +148,7 @@ export function uniforms(fields) {
 }
 /** Число групп 16×16 на сетку w×h. */
 export const groups2 = (w, h) => [Math.ceil(w / 16), Math.ceil(h / 16), 1];
+/** Группы по 256 для одномерной сетки n (вторая ось — если групп больше 65535). */
+export const groups1 = (n) => { const g = Math.ceil(n / 256); return g <= 65535 ? [g, 1, 1] : [65535, Math.ceil(g / 65535), 1]; };
+/** Заглушка привязки, которую шейдер не читает (layout 'auto' требует буфер на каждом binding). */
+export const GPU_DUMMY = Object.freeze({ bytes: 16 });

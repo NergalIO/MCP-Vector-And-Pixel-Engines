@@ -13,7 +13,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync } from 'node:fs';
 import { resolve, dirname, extname, sep } from 'node:path';
 import { renderSVG, applyEdits, editsEmpty } from '../engine/kontur.js';
-import { probeRaster, resolveSrc, imageSize, IMAGE_MIME } from './render.mjs';
+import { probeRaster, resolveSrc, imageSize, IMAGE_MIME, IMAGE_SRC_KEYS } from './render.mjs';
 import { renderLit } from './lighting.mjs';
 import * as store from './store.mjs';
 import { ROOT, log, baseDir, S, mapSrc, toRel, replaceScene, editsInfo, resetEdits, openPath, editsPathFor, buildScriptFor, onChange, setPreviewUrl, undo, redo, historyInfo } from './store.mjs';
@@ -30,7 +30,7 @@ function sceneAssets() {
   const out = new Set();
   for (const n of store.scene.nodes) {
     if (n.type !== 'image') continue;
-    for (const src of [n.props?.src, ...(n.keys?.src || []).map((k) => k.v)]) { const p = resolveSrc(src, baseDir()); if (p) out.add(resolve(p)); }
+    for (const src of [...IMAGE_SRC_KEYS.map((k) => n.props?.[k]), ...(n.keys?.src || []).map((k) => k.v)]) { const p = resolveSrc(src, baseDir()); if (p) out.add(resolve(p)); }
   }
   return out;
 }

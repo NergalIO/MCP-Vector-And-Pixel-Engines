@@ -2,11 +2,15 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PRESETS, MODIFIERS, easings, describeScene } from '../../engine/kontur.js';
-import { probeRaster, rasterHelp, canPng, capabilities } from '../render.mjs';
+import { probeRaster, rasterNote, canPng, capabilities } from '../render.mjs';
 import { compatReport } from '../godot.mjs';
 import { worldItemsDoc } from '../../engine/world3d.js';
 import { ROOT, scene, scenePath, readOnly, loadNotes, previewUrl, mutate, replaceScene, undo, redo, newScene, saveAs, openPath, openExample, editsInfo, resetEdits } from '../store.mjs';
-import { ANY, NUM, STR, OBJ, text, summary } from './common.mjs';
+import { ANY, NUM, STR, OBJ, text, summary, nodeById } from './common.mjs';
+
+/** docs/REFERENCE.md — читается один раз. */
+let refDoc = null;
+const reference = () => (refDoc ??= readFileSync(resolve(ROOT, 'docs/REFERENCE.md'), 'utf8'));
 
 export const tools = [
   {
@@ -15,7 +19,7 @@ export const tools = [
     inputSchema: { type: 'object', properties: {} },
     run: async () => {
       await probeRaster();
-      const png = canPng() ? `да (${capabilities.png})` : `нет — ${capabilities.pngError}. ${rasterHelp()}`;
+      const png = canPng() ? `да (${capabilities.png})` : `нет — ${rasterNote()}`;
       const issues = compatReport(scene, 'godot');
       const ei = editsInfo();
       const edl = ei.mode ? `\nПравки: ${ei.path} — объектов ${ei.count}${ei.warnings.length ? `, предупреждений ${ei.warnings.length} (edits_info)` : ''}${ei.locked ? ' — ЗАБЛОКИРОВАНЫ' : ''}. Исходный файл не перезаписывается, правки ложатся поверх при каждой пересборке.` : '';
@@ -30,11 +34,11 @@ export const tools = [
     inputSchema: { type: 'object', properties: { topic: { type: 'string', enum: ['all', 'modifiers', 'presets', 'easings', '2.5d', 'props'] } } },
     run: ({ topic = 'all' }) => {
       if (topic === 'props') return text(worldItemsDoc());
-      if (topic === '2.5d') { const md = readFileSync(resolve(ROOT, 'docs/REFERENCE.md'), 'utf8'); const i = md.indexOf('## 2.5D'); return text(md.slice(i, md.indexOf('\n## ', i + 5))); }
+      if (topic === '2.5d') { const md = reference(); const i = md.indexOf('## 2.5D'); return text(md.slice(i, md.indexOf('\n## ', i + 5))); }
       if (topic === 'modifiers') return text(Object.entries(MODIFIERS).map(([k, v]) => `${k}: ${v.doc}`).join('\n'));
       if (topic === 'presets') return text(Object.entries(PRESETS).map(([k, v]) => `${k}: ${v.doc}`).join('\n'));
       if (topic === 'easings') return text(Object.keys(easings).join(', ') + '\nА также: "cubic-bezier(a,b,c,d)", [a,b,c,d], "spring(k,d,m)", {spring:{...}}, {steps:n}');
-      return text(readFileSync(resolve(ROOT, 'docs/REFERENCE.md'), 'utf8'));
+      return text(reference());
     },
   },
   {
@@ -53,7 +57,7 @@ export const tools = [
     name: 'scene_get_json',
     description: 'Получить полный JSON сцены (или одного узла по id).',
     inputSchema: { type: 'object', properties: { id: STR } },
-    run: ({ id }) => text(id ? scene.nodes.find((n) => n.id === id) ?? `Узел ${id} не найден` : scene),
+    run: ({ id }) => text(id ? nodeById(scene, id) ?? `Узел ${id} не найден` : scene),
   },
   {
     name: 'scene_set_json',

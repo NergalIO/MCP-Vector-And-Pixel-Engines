@@ -4,20 +4,20 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { bundleEngine } from '../mcp/bundle.mjs';
+import { runNode } from './helpers/common.mjs';
 
 const golden = fileURLToPath(new URL('golden.mjs', import.meta.url));
 
 test('эталоны SVG: engine/kontur.js', () => {
-  execFileSync(process.execPath, [golden], { stdio: 'pipe' });
+  runNode(golden);
 });
 
 test('эталоны SVG: движок одним модулем (mcp/bundle.mjs)', () => {
   const f = join(mkdtempSync(join(tmpdir(), 'kontur-b-')), 'kontur.mjs');
   writeFileSync(f, bundleEngine());
-  execFileSync(process.execPath, [golden, '--engine', f], { stdio: 'pipe' });
+  runNode(golden, '--engine', f);
 });
 
 test('сборка одним модулем отдаёт тот же набор имён', async () => {

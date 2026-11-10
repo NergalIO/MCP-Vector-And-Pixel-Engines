@@ -1,7 +1,8 @@
 /** Поверхности и проходы отложенного света (2.5D), камера 2.5D. */
 import { parseColor } from './color.js';
-import { DEG, clamp, fmt, hashStr, mat } from './math.js';
+import { DEG, clamp, fmt, hashStr, mat, vec3 } from './math.js';
 import { isGrad, normStops } from './tracks.js';
+import { memoByObject } from './cache.js';
 
 /** Настройки рельефа по умолчанию (режим высот для карт нормалей). */
 export const RELIEF_DEFAULT = { height: 0.5, depth: 0.3, bevel: 8, profile: 'round', luma: 0.25, background: 0 };
@@ -74,14 +75,7 @@ export const PASS_MODES = Object.keys(RENDER_MODES).filter((k) => RENDER_MODES[k
 export const PASS_BG = Object.fromEntries(PASS_MODES.map((k) => [k, RENDER_MODES[k].bg ?? null]));
 export const isPassMode = (m) => PASS_MODES.includes(m) || (typeof m === 'string' && m.startsWith('mask:') && m.length > 5);
 export const SURF_INHERIT = ['plane', 'normal', 'normalGrad', 'u', 'v', 'spec', 'emissive', 'mat', 'tag', 'sky'];
-export const v3 = {
-  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
-  mul: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
-  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
-  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
-  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
-};
-export const vec3 = v3;
+export const v3 = vec3;
 export const isVec3 = (a) => Array.isArray(a) && a.length >= 3 && a.slice(0, 3).every((x) => typeof x === 'number' && Number.isFinite(x));
 /** Оси грани по нормали: u — «вдоль» (горизонталь), v — «вверх по грани». Для пола u = X, v = +Z (вглубь). */
 export function surfaceAxes(n) {
@@ -91,9 +85,25 @@ export function surfaceAxes(n) {
   u = v3.norm(u);
   return { u, v: v3.norm(v3.cross(u, n)) };
 }
-/** Действующая поверхность узла: наследуемое от предков + своё. own === false — узел без поверхности. */
+/**
+ * Действующая поверхность узла: наследуемое от предков + своё. own === false — узел без поверхности.
+ * Чистая функция пары объектов: результат запоминается (WeakMap по родителю, затем по своей), поэтому у статичных
+ * узлов поверхность каждого кадра и прохода — тот же объект. Результат не изменять.
+ */
+const surfMemo = new WeakMap();
+const NO_SURF = {};
 export function resolveSurface(parent, own) {
   if (own === false) return null;
+  if (own != null && typeof own !== 'object') return resolveSurfaceRaw(parent, own);
+  const pk = parent || NO_SURF;
+  let m = surfMemo.get(pk);
+  if (!m) surfMemo.set(pk, (m = new WeakMap()));
+  const ok = own || NO_SURF;
+  let s = m.get(ok);
+  if (s === undefined) m.set(ok, (s = resolveSurfaceRaw(parent, own)));
+  return s;
+}
+function resolveSurfaceRaw(parent, own) {
   const s = {};
   if (parent) for (const k of SURF_INHERIT) if (parent[k] !== undefined) s[k] = parent[k];
   const has = own && typeof own === 'object';
@@ -165,10 +175,11 @@ export function normalGradLayers(ng) {
   return out;
 }
 /** Краски слоёв градиента нормали в проходе normal: url(#…) на слой (первый — обычный, остальные — lighten). */
+// слои с ключами общих определений: по объекту градиента (у статичного узла — один и тот же), без JSON на каждый кадр
+const keyedLayers = memoByObject((ng) => normalGradLayers(ng).map((L) => ({ L, key: `ng|${JSON.stringify(L)}` })));
 export function normalGradPaints(ctx, ng) {
-  return normalGradLayers(ng).map((L) => {
+  return keyedLayers(ng).map(({ L, key }) => {
     const keep = [L.ch.includes('x'), L.ch.includes('y'), L.ch.includes('z')];
-    const key = `ng|${JSON.stringify(L)}`;
     if (ctx.patterns.has(key)) return ctx.reuse(key);
     const stops = L.stops.map(([t, n]) => {
       const nn = keep[0] && keep[1] && keep[2] ? v3.norm(n) : n;

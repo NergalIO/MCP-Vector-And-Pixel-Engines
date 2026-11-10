@@ -11,6 +11,7 @@
  * Код, который не укладывается в подмножество, исполняется как настоящий JS (new Function) только
  * если это разрешено политикой: в браузере — да, в Node — при KONTUR_TRUST_EXPR=1 (или setExprPolicy).
  */
+import { BoundedCache } from './cache.js';
 
 const KEYWORDS = new Set(['const', 'let', 'var', 'if', 'else', 'return', 'true', 'false', 'null', 'undefined', 'typeof', 'NaN', 'Infinity']);
 const BLOCKED = new Set(['constructor', 'prototype', '__proto__', '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__', 'caller', 'callee', 'arguments', 'call', 'apply', 'bind', 'valueOf', 'toString', 'toLocaleString', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable']);
@@ -300,7 +301,7 @@ const policy = { allowJS: typeof window !== 'undefined' || envTrust() };
 export function setExprPolicy(p = {}) { if ('allowJS' in p) policy.allowJS = !!p.allowJS; exprCache.clear(); return { ...policy }; }
 export const exprPolicy = () => ({ ...policy });
 
-export const exprCache = new Map();
+export const exprCache = new BoundedCache(2000);
 const JS_OFF = 'JS-выражения выключены (безопасный режим): код выходит за подмножество выражений. Разрешить: KONTUR_TRUST_EXPR=1 или setExprPolicy({ allowJS: true })';
 /**
  * Функция выражения expr. strict — для добавления модификатора: код, требующий JS при выключенном JS,
@@ -320,7 +321,6 @@ export function compileExpr(code, { strict = false } = {}) {
     else if (strict) throw new Error(`${JS_OFF}. Не поддержано: ${safeErr.message}`);
     else { fn = () => undefined; fn.disabled = `${JS_OFF}. ${safeErr.message}`; }
   }
-  if (exprCache.size > 2000) exprCache.clear();
   exprCache.set(key, fn);
   return fn;
 }

@@ -1,8 +1,8 @@
 // Объёмный свет: лучи солнца в дымке (марш по лучу камеры с тенью по BVH, фаза Хеньи — Гринстейна, 1/4 разрешения)
 // и ореолы ламп (аналитический интеграл рассеяния 1/d² вдоль луча внутри сферы влияния).
 import { gauss, upF } from './filters.mjs';
-import { hash01, rgb, lin22 } from './util.mjs';
-import { lampGain, lampRect, lightColors } from './shade.mjs';
+import { hash01 } from './util.mjs';
+import { lampGain, lampRect, lightColors, lampColor } from './shade.mjs';
 
 /** Добавить объёмный свет в col (на месте). Возвращает число лучей теней. */
 export function volumetricLight(G, st, V, { col, lights, bvh }) {
@@ -39,7 +39,7 @@ export function volumetricLight(G, st, V, { col, lights, bvh }) {
     for (const lt of lights) {
       const kk = lampGain(st, lt);
       if (kk <= 0 || !(lt.radius > 0) || lt.halo === false) continue;
-      const lc = rgb(lt.color).map((v) => lin22(v) * lt.energy * kk * 2.2 * ld * (lt.halo ?? (lt.group === 'fairy' ? 0.3 : 1)));
+      const lc = lampColor(lt, kk, ld, lt.halo ?? (lt.group === 'fairy' ? 0.3 : 1));
       const [lx, ly, lz] = lt.p3, r = Math.min(lt.radius, (V.haloRadius ?? 0.45) * lt.radius + 0.6), r2 = r * r;
       const rect = lampRect(G, lx, ly, lz, r);
       if (!rect) continue;

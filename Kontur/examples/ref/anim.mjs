@@ -31,7 +31,7 @@ if (args.includes('--worker')) {
   for (let i = from; i < to; i++) {
     if (i % n !== k || (existsSync(frame(i)) && !args.includes('--force'))) continue;
     // чуть позже момента кадра: ключи hold стоят ровно на i/FPS
-    const r = await renderLit(scene, i / anim.FPS + 1e-4, { width, baseDir: here });
+    const r = await renderLit(scene, i / anim.FPS + 1e-4, { width, baseDir: here, pngLevel: 1 }); // промежуточный кадр: сжатие быстрое, ffmpeg всё равно перекодирует
     writeFileSync(frame(i), r.png);
     process.stdout.write(`${i} `);
   }

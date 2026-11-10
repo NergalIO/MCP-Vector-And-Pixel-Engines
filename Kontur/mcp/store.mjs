@@ -4,10 +4,11 @@
  * актуальную сцену); менять его можно только функциями этого модуля.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync, watchFile, unwatchFile, statSync, renameSync, copyFileSync } from 'node:fs';
-import { resolve, dirname, relative, isAbsolute, sep } from 'node:path';
+import { resolve, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createScene, validateScene, validateStructure, repairScene, migrate, invalidate, evaluate, applyEdits, diffScenes, editsCount, describeScene } from '../engine/kontur.js';
-import { inlineAssets, resolveSrc } from './render.mjs';
+import { createScene, validateScene, validateStructure, repairScene, migrate, invalidate, evaluate, applyEdits, diffScenes, editsCount } from '../engine/kontur.js';
+import { inlineAssets, mapImageSrcs, resolveSrc } from './render.mjs';
+import { posixRel } from './paths.mjs';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const log = (...a) => process.stderr.write('[kontur] ' + a.join(' ') + '\n');
@@ -133,20 +134,13 @@ export function resetEdits(ids) {
 /* ------------------------------------------------------------------ растровые ассеты: пути относительно папки сцены */
 export const baseDir = () => dirname(scenePath);
 export const S = () => inlineAssets(scene, baseDir());
-export function mapSrc(sc, fn) {
-  return { ...sc, nodes: sc.nodes.map((n) => {
-    if (n.type !== 'image') return n;
-    const c = { ...n, props: { ...n.props } };
-    if (c.props.src != null) c.props.src = fn(c.props.src);
-    if (n.keys?.src) c.keys = { ...n.keys, src: n.keys.src.map((k) => ({ ...k, v: fn(k.v) })) };
-    return c;
-  }) };
-}
+/** Ссылки на картинки растровых слоёв (src, normalSrc, heightSrc…) через fn. */
+export const mapSrc = (sc, fn) => mapImageSrcs(sc, fn);
 export const toAbs = (dir) => (src) => resolveSrc(src, dir) || src;
 export const toRel = (dir) => (src) => {
   if (typeof src !== 'string' || !isAbsolute(src)) return src;
-  const r = relative(dir, src);
-  return r.startsWith('..') || isAbsolute(r) ? src : r.split(sep).join('/');
+  const r = posixRel(dir, src);
+  return r.startsWith('..') || isAbsolute(r) ? src : r;
 };
 export const rebase = (sc, from, to) => mapSrc(mapSrc(sc, toAbs(from)), toRel(to));
 
@@ -305,4 +299,3 @@ export function openExample(f) {
   const s = rebase(loadFrom(f), dirname(f), baseDir());
   replaceScene('открыть пример', s);
 }
-export const summaryText = (msg) => `${msg}\n\n${describeScene(scene)}`;

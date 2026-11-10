@@ -5,12 +5,12 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { createScene, ops, evaluate, renderSVG, invalidate } from '../engine/kontur.js';
+import { ex } from './helpers/common.mjs';
 
 const args = process.argv.slice(2);
 const CI = args.includes('--ci');
 const budgetsFile = new URL('bench.json', import.meta.url);
 const budgets = existsSync(budgetsFile) ? JSON.parse(readFileSync(budgetsFile, 'utf8')) : {};
-const ex = (n) => JSON.parse(readFileSync(new URL(`../examples/${n}.json`, import.meta.url), 'utf8'));
 
 function measure(name, fn, { runs = 11, warmup = 3, setup } = {}) {
   for (let i = 0; i < warmup; i++) fn(setup?.());

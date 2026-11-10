@@ -46,6 +46,17 @@ export function cacheFor(scene) {
 export function invalidate(scene) { sceneCaches.delete(scene); }
 
 /**
+ * Значение, производное от всей сцены (сериализация, сводки), — посчитать один раз и держать, пока сцену не изменили:
+ * живёт в тех же кэшах, что и индекс, поэтому сбрасывается invalidate / invalidateNode и заменой массива узлов.
+ */
+export function sceneMemo(scene, key, make) {
+  const c = index(scene);
+  const m = c.memo || (c.memo = new Map());
+  if (!m.has(key)) m.set(key, make(scene));
+  return m.get(key);
+}
+
+/**
  * Сбросить только то, что зависит от узла id (его свойства, ключи или модификаторы изменились, а id, родитель,
  * тип, маски и IK — нет): пружины, дорожки, статичный кэш узла, предков и тех, кто ссылается на узел.
  * Если индекса ещё нет или узел неизвестен — полный сброс.
@@ -61,6 +72,7 @@ export function invalidateNode(scene, id) {
   const drop = new Set();
   for (const x of touched) for (let p = x; p != null && !drop.has(p); p = c.byId.get(p)?.parent ?? null) drop.add(p);
   for (const x of drop) c.stat.delete(x);
+  c.frame = null; c.memo = null;
   if (c.evalCache.size) for (const k of [...c.evalCache.keys()]) if (drop.has(k.slice(0, k.indexOf('|')))) c.evalCache.delete(k);
   if (touched.size > 1) c.springs.clear();
   else for (const k of [...c.springs.keys()]) if (k.startsWith(id + '|')) c.springs.delete(k);

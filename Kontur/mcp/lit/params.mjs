@@ -66,6 +66,8 @@ export const LIGHT_PRESETS = {
     style: [{ type: 'ink', strength: 0.3, color: 'albedo', darken: 0.35, depthWidth: 1 }, { type: 'chromatic', amount: 1 }, { type: 'sharpen', amount: 0.3 }, { type: 'grain', amount: 0.025 }, { type: 'vignette', strength: 0.25 }],
   },
 };
+/** Копия цепочки стилей пресета name (звенья — новые объекты: правка сцены не трогает пресет). */
+export const presetStyle = (name) => LIGHT_PRESETS[name].style.map((x) => ({ ...x }));
 
 /** Звенья цепочки стилей (LDR, после тонмаппинга и цветокоррекции), в любом порядке. */
 export const STYLE_TYPES = ['cel', 'hatch', 'kuwahara', 'paint', 'pixelate', 'ink', 'paper', 'vignette', 'fxaa', 'sharpen', 'chromatic', 'grain'];

@@ -1,6 +1,7 @@
 /** Геометрия: разбор путей, фигуры, морфинг, измерение, деформация.
  * Геометрия = массив подпутей { x0, y0, segs: [[c1x,c1y,c2x,c2y,x,y], ...], closed } */
 import { DEG, TAU, clamp, lerp, noise3, num3 } from './math.js';
+import { BoundedCache, memoByObject } from './cache.js';
 
 export const lineSeg = (x0, y0, x, y) => [x0 + (x - x0) / 3, y0 + (y - y0) / 3, x0 + (2 * (x - x0)) / 3, y0 + (2 * (y - y0)) / 3, x, y];
 
@@ -43,7 +44,12 @@ export function arcToCubics(x1, y1, rx, ry, phi, fa, fs, x2, y2) {
   return out;
 }
 
-export const pathCache = new Map();
+/**
+ * Кеш разобранных путей: d → геометрия. Ограничен суммарной длиной строк (а не числом записей: в больших сценах
+ * десятки тысяч путей, и сброс по счёту заставлял разбирать каждый путь заново на каждом проходе). Переполнение —
+ * вытесняются самые старые записи.
+ */
+export const pathCache = new BoundedCache(16e6, (d) => d.length);
 /** Разбор SVG path d → геометрия. Поддерживает M L H V C S Q T A Z (абс./отн.). */
 export function parsePath(d) {
   if (pathCache.has(d)) return pathCache.get(d);
@@ -116,18 +122,41 @@ export function parsePath(d) {
     prevC = nextC; prevQ = nextQ;
   }
   const out = subs.filter((s) => s.segs.length > 0);
-  if (pathCache.size > 1000) pathCache.clear();
   pathCache.set(d, out);
   return out;
 }
 
+/** Отрезок, заданный кривой (lineSeg): контрольные точки — на трети и двух третях прямой из (x, y). */
+const isLineSeg = (x, y, c) => {
+  const e = 1e-9 * (1 + Math.abs(x) + Math.abs(y) + Math.abs(c[4]) + Math.abs(c[5]));
+  return Math.abs(c[0] - (x + (c[4] - x) / 3)) <= e && Math.abs(c[1] - (y + (c[5] - y) / 3)) <= e
+    && Math.abs(c[2] - (x + (2 * (c[4] - x)) / 3)) <= e && Math.abs(c[3] - (y + (2 * (c[5] - y)) / 3)) <= e;
+};
+const pathStr = new WeakMap();
+/**
+ * Геометрия → строка d. Прямые отрезки пишутся как L (а не кривой из шести чисел), замыкающий отрезок перед Z
+ * не пишется — d короче в разы, а SVG кадра быстрее разбирает растеризатор. Строка кешируется на объекте геометрии
+ * (геометрия из кеша путей — одна и та же между проходами и кадрами; менять её на месте нельзя).
+ */
 export function geomToPath(g) {
+  const hit = pathStr.get(g);
+  if (hit !== undefined) return hit;
   let s = '';
   for (const sp of g) {
     s += 'M' + num3(sp.x0) + ' ' + num3(sp.y0);
-    for (const c of sp.segs) s += 'C' + num3(c[0]) + ' ' + num3(c[1]) + ' ' + num3(c[2]) + ' ' + num3(c[3]) + ' ' + num3(c[4]) + ' ' + num3(c[5]);
+    let x = sp.x0, y = sp.y0;
+    const segs = sp.segs, last = segs.length - 1;
+    for (let k = 0; k <= last; k++) {
+      const c = segs[k];
+      if (isLineSeg(x, y, c)) {
+        // замыкающий отрезок к началу контура рисует сам Z
+        if (!(k === last && sp.closed && Math.abs(c[4] - sp.x0) < 1e-9 && Math.abs(c[5] - sp.y0) < 1e-9)) s += 'L' + num3(c[4]) + ' ' + num3(c[5]);
+      } else s += 'C' + num3(c[0]) + ' ' + num3(c[1]) + ' ' + num3(c[2]) + ' ' + num3(c[3]) + ' ' + num3(c[4]) + ' ' + num3(c[5]);
+      x = c[4]; y = c[5];
+    }
     if (sp.closed) s += 'Z';
   }
+  if (g && typeof g === 'object') pathStr.set(g, s);
   return s;
 }
 
@@ -329,7 +358,7 @@ export function pairSubpaths(a, b) {
   }
   return [a, b];
 }
-export const morphCache = new Map();
+export const morphCache = new BoundedCache(500);
 /** Готовит две геометрии к попарной интерполяции (одинаковое число сегментов, выравнивание старта). */
 export function prepareMorph(ga, gb, key) {
   if (key && morphCache.has(key)) return morphCache.get(key);
@@ -344,7 +373,7 @@ export function prepareMorph(ga, gb, key) {
     if (!b) { const [cx, cy] = centroid(a); b = { x0: cx, y0: cy, segs: a.segs.map(() => [cx, cy, cx, cy, cx, cy]), closed: a.closed }; }
     pairs.push(pairSubpaths(a, b));
   }
-  if (key) { if (morphCache.size > 500) morphCache.clear(); morphCache.set(key, pairs); }
+  if (key) morphCache.set(key, pairs);
   return pairs;
 }
 export function lerpGeom(pairs, u) {
@@ -427,8 +456,9 @@ export function deformGeom(g, { amount = 10, scale = 0.01, speed = 0.5, seed = 0
   });
 }
 
-/** Габариты геометрии по опорным точкам (для отбрасывания вырожденных фигур). */
-export function geomBox(geom) {
+/** Габариты геометрии по опорным точкам (для отбрасывания вырожденных фигур); запоминаются на объекте геометрии. */
+export const geomBox = memoByObject(geomBoxRaw);
+function geomBoxRaw(geom) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const sp of geom) {
     if (sp.x0 < x0) x0 = sp.x0; if (sp.x0 > x1) x1 = sp.x0; if (sp.y0 < y0) y0 = sp.y0; if (sp.y0 > y1) y1 = sp.y0;

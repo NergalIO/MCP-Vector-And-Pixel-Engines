@@ -1,14 +1,18 @@
 // Цвет кадра: тонмаппинг (ACES, AgX, по максимуму канала), перенос палитры с референса (Lab), LUT .cube,
 // цветокоррекция (lift/gamma/gain, контраст, split toning), медианное сечение палитры (pixelate).
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
+import { toLin, toGam } from '../../engine/kontur.js';
 import { decodeImage } from '../render.mjs';
+import { fileStamp } from '../files.mjs';
 import { clamp01 } from './util.mjs';
-import { viaGPU } from './gpu.mjs';
+import { tryGPU } from './gpu.mjs';
 import { gpuTonemap, gpuMatch, gpuGrade } from './gpu-post.mjs';
 
 /* ============================== тонмаппинг ============================== */
 export const acesC = (x) => clamp01((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14));
+/** Линейное → экранное (гамма 2.2). */
+const gam22 = (x) => Math.pow(x, 1 / 2.2);
 /**
  * AgX (минимальная аппроксимация, sRGB-база): мягкое плечо, насыщенные цвета в светах идут к белому, не меняя тона
  * (ACES уводит насыщенный оранжевый в жёлтый). out — уже экранные значения 0..1.
@@ -33,9 +37,9 @@ export function hueTonemap(r, g, b, out) {
   if (!(m > 1e-8)) { out[0] = out[1] = out[2] = 0; return; }
   const t = acesC(m), k = t / m, q = clamp01((m - 0.8) / 5.2);
   const w = q * q * (3 - 2 * q) * 0.6;
-  out[0] = Math.pow(clamp01(r * k + (t - r * k) * w), 1 / 2.2);
-  out[1] = Math.pow(clamp01(g * k + (t - g * k) * w), 1 / 2.2);
-  out[2] = Math.pow(clamp01(b * k + (t - b * k) * w), 1 / 2.2);
+  out[0] = gam22(clamp01(r * k + (t - r * k) * w));
+  out[1] = gam22(clamp01(g * k + (t - g * k) * w));
+  out[2] = gam22(clamp01(b * k + (t - b * k) * w));
 }
 /**
  * Линейный HDR col (n·3) → экранный img 0..1 (n·3): экспозиция, тонмаппинг (aces | agx | hue | none), насыщенность.
@@ -43,7 +47,7 @@ export function hueTonemap(r, g, b, out) {
 export function tonemapFrame(col, n, { exposure = 1, tonemap = 'aces', saturation = 1 } = {}) {
   const img = new Float32Array(n * 3);
   const tmo = tonemap === 'agx' || tonemap === 'hue' ? tonemap : null, px3 = [0, 0, 0], exp = exposure, sat = saturation;
-  if (viaGPU('post', n, () => (gpuTonemap(col, img, n, { exposure, tonemap, saturation }), true), () => false)) return { img, tonemap: tmo };
+  if (tryGPU('post', n, () => gpuTonemap(col, img, n, { exposure, tonemap, saturation }))) return { img, tonemap: tmo };
   for (let i = 0; i < n; i++) {
     let s = 0;
     if (tmo) {
@@ -53,8 +57,8 @@ export function tonemapFrame(col, n, { exposure = 1, tonemap = 'aces', saturatio
       for (let c = 0; c < 3; c++) { img[j + c] = px3[c]; s += px3[c]; }
     } else for (let c = 0; c < 3; c++) {
       let x = col[i * 3 + c] * exp;
-      if (tonemap !== 'none') x = clamp01((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)); else x = clamp01(x);
-      img[i * 3 + c] = Math.pow(x, 1 / 2.2); s += img[i * 3 + c];
+      x = tonemap !== 'none' ? acesC(x) : clamp01(x);
+      img[i * 3 + c] = gam22(x); s += img[i * 3 + c];
     }
     const lum = s / 3;
     for (let c = 0; c < 3; c++) img[i * 3 + c] = clamp01(lum + (img[i * 3 + c] - lum) * sat);
@@ -63,21 +67,19 @@ export function tonemapFrame(col, n, { exposure = 1, tonemap = 'aces', saturatio
 }
 
 /* ============================== палитра с референса (grade.matchRef) ============================== */
-const s2l = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
-const l2s = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
 const labF = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
 const labFi = (f) => { const f3 = f * f * f; return f3 > 0.008856 ? f3 : (f - 16 / 116) / 7.787; };
 /** sRGB 0..1 (экранные) → CIELAB D65. */
 export function toLab(r, g, b, out) {
-  r = s2l(r); g = s2l(g); b = s2l(b);
+  r = toLin(r); g = toLin(g); b = toLin(b);
   const fx = labF((0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047), fy = labF(0.2126 * r + 0.7152 * g + 0.0722 * b), fz = labF((0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883);
   out[0] = 116 * fy - 16; out[1] = 500 * (fx - fy); out[2] = 200 * (fy - fz);
 }
 export function fromLab(L, a, b, out) {
   const fy = (L + 16) / 116, X = 0.95047 * labFi(fy + a / 500), Y = labFi(fy), Z = 1.08883 * labFi(fy - b / 200);
-  out[0] = clamp01(l2s(3.2406 * X - 1.5372 * Y - 0.4986 * Z));
-  out[1] = clamp01(l2s(-0.9689 * X + 1.8758 * Y + 0.0415 * Z));
-  out[2] = clamp01(l2s(0.0557 * X - 0.204 * Y + 1.057 * Z));
+  out[0] = clamp01(toGam(3.2406 * X - 1.5372 * Y - 0.4986 * Z));
+  out[1] = clamp01(toGam(-0.9689 * X + 1.8758 * Y + 0.0415 * Z));
+  out[2] = clamp01(toGam(0.0557 * X - 0.204 * Y + 1.057 * Z));
 }
 /** Веса тональных зон (тени, середина, света) по L. */
 const zoneW = (L, w) => { w[0] = clamp01(1 - L / 50); w[2] = clamp01((L - 50) / 50); w[1] = 1 - w[0] - w[2]; };
@@ -106,16 +108,10 @@ function labStats(count, get, step = 1) {
   return { meanL, stdL, ma, mb, stdC: Math.sqrt(Math.max(1e-6, sc / m)), ga: (za[0] + za[1] + za[2]) / gw, gb: (zb[0] + zb[1] + zb[2]) / gw, zw: zw.map((v) => v / gw) };
 }
 /** Кеш файлов по пути и времени изменения: правка файла на диске видна без перезапуска сервера. */
-function fileKey(src, baseDir) {
-  const p = resolvePath(baseDir || '.', src);
-  let mt;
-  try { mt = statSync(p).mtimeMs; } catch { return { p, key: null }; }
-  return { p, key: `${p}|${mt}` };
-}
 const refCache = new Map();
 /** Статистика референса (PNG, JPEG, WebP… — путь относительно baseDir), с кешем по времени изменения. */
 export async function loadRefStats(src, baseDir) {
-  const { p, key } = fileKey(src, baseDir);
+  const p = resolvePath(baseDir || '.', src), key = fileStamp(p, { missing: 'null' });
   if (!key) throw new Error(`grade.matchRef: нет файла ${p}`);
   if (refCache.has(key)) return refCache.get(key);
   const im = await decodeImage(readFileSync(p), 400);
@@ -133,7 +129,7 @@ export function matchPalette(img, n, ref, o = {}) {
   const step = Math.max(1, Math.floor(n / 150000));
   const src = labStats(n, (i, out) => { out[0] = img[i * 3]; out[1] = img[i * 3 + 1]; out[2] = img[i * 3 + 2]; }, step);
   const kL = Math.min(1.6, Math.max(0.6, ref.stdL / src.stdL)), kC = 1 + (Math.min(1.6, Math.max(0.6, ref.stdC / src.stdC)) - 1) * wc;
-  if (viaGPU('post', n, () => (gpuMatch(img, n, { src, ref, amt, wl, kL, kC, zones }), true), () => false)) return { src, ref };
+  if (tryGPU('post', n, () => gpuMatch(img, n, { src, ref, amt, wl, kL, kC, zones }))) return { src, ref };
   const q = [0, 0, 0], w = [0, 0, 0], w2 = [0, 0, 0], out = [0, 0, 0];
   for (let i = 0; i < n; i++) {
     const j = i * 3;
@@ -154,12 +150,12 @@ const lutCache = new Map();
 /** 3D LUT формата .cube (Resolve/Adobe): { size, data Float32 (r быстрее всех), min, max }; текст или путь. */
 export function loadCube(src, baseDir) {
   const inline = src.includes('\n');
-  const fk = inline ? null : fileKey(src, baseDir);
-  const key = inline ? `inline|${src}` : fk.key || `${fk.p}|missing`;
+  const f = inline ? null : resolvePath(baseDir || '.', src);
+  const key = inline ? `inline|${src}` : fileStamp(f);
   if (lutCache.has(key)) return lutCache.get(key);
   let lut = null;
   try {
-    const text = inline ? src : readFileSync(fk.p, 'utf8');
+    const text = inline ? src : readFileSync(f, 'utf8');
     let size = 0, min = [0, 0, 0], max = [1, 1, 1];
     const vals = [];
     for (const raw of text.split(/\r?\n/)) {
@@ -193,7 +189,7 @@ function lutSample(lut, r, g, b, out) {
 export function applyGrade(g, img, n, baseDir) {
   const { lift, gamma, gain } = g, sp = g.split, con = g.contrast ?? 1;
   const lut = g.lut ? loadCube(g.lut, baseDir) : null, la = g.lutAmount ?? 1, tmp = [0, 0, 0];
-  if (!lut && viaGPU('post', n, () => (gpuGrade(img, n, g), true), () => false)) return; // с LUT — здесь
+  if (!lut && tryGPU('post', n, () => gpuGrade(img, n, g))) return; // с LUT — здесь
   const lum3 = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
   const shL = sp ? lum3(sp.shadows) : 0, hiL = sp ? lum3(sp.highlights) : 0;
   for (let i = 0; i < n; i++) {

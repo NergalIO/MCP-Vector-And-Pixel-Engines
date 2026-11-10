@@ -1,10 +1,12 @@
 // Инструменты MCP: 2.5D: камера, сборка мира, материалы, поверхности, свет и стиль отложенного рендера.
 import { resolveLighting, resolveStyle, effectsSummary, LIGHT_PRESETS, STYLE_TYPES } from '../lighting.mjs';
+import { presetStyle } from '../lit/params.mjs';
+import { isObj } from '../lit/util.mjs';
 import { worldBuild, worldItemEdit, rebuildWorlds, cameraSet, materialApply, surfaceOfNode } from '../world_ops.mjs';
 import { MATERIALS, worldItemsDoc } from '../../engine/world3d.js';
 import { MATERIAL_PRESETS } from '../materials.mjs';
 import { scene, mutate } from '../store.mjs';
-import { ANY, NUM, STR, OBJ, text } from './common.mjs';
+import { ANY, NUM, STR, OBJ, text, needNode } from './common.mjs';
 
 export const tools = [
   {
@@ -59,8 +61,7 @@ mode: "pixel" — попиксельный материал без узлов: �
     run: ({ ids, surface, unset = [], replace }) => {
       mutate('поверхность', () => {
         for (const id of ids) {
-          const n = scene.nodes.find((x) => x.id === id);
-          if (!n) throw new Error(`Узел ${id} не найден`);
+          const n = needNode(scene, id);
           n.props = n.props || {};
           if (surface === false || surface === null) { delete n.props.surface; continue; }
           const cur = replace || typeof n.props.surface !== 'object' || !n.props.surface ? {} : { ...n.props.surface };
@@ -79,11 +80,11 @@ mode: "pixel" — попиксельный материал без узлов: �
     run: (a) => {
       const { replace, withStyle, ...fields } = a;
       mutate('свет', () => {
-        const isO = (v) => v && typeof v === 'object' && !Array.isArray(v);
+        // слияние на один уровень: поля-объекты дополняются, глубже — заменяются целиком
         const cur = replace ? {} : { ...(scene.lighting || {}) };
-        for (const [k, v] of Object.entries(fields)) cur[k] = isO(v) && isO(cur[k]) ? { ...cur[k], ...v } : v;
+        for (const [k, v] of Object.entries(fields)) cur[k] = isObj(v) && isObj(cur[k]) ? { ...cur[k], ...v } : v;
         scene.lighting = cur;
-        if (a.preset && withStyle !== false) scene.style = LIGHT_PRESETS[a.preset].style.map((x) => ({ ...x }));
+        if (a.preset && withStyle !== false) scene.style = presetStyle(a.preset);
       });
       const st = resolveLighting(scene);
       const fx = effectsSummary(st);
@@ -97,7 +98,7 @@ mode: "pixel" — попиксельный материал без узлов: �
     run: ({ chain, preset }) => {
       if (!chain && !preset) return text(`Стиль: ${scene.style ? JSON.stringify(scene.style) : `(по пресету света) ${resolveStyle(scene).map((x) => x.type).join(' → ')}`}`);
       for (const s of chain || []) if (!STYLE_TYPES.includes(s?.type)) throw new Error(`Тип стиля ${s?.type}? Есть: ${STYLE_TYPES.join(', ')}`);
-      mutate('стиль', () => { scene.style = chain || LIGHT_PRESETS[preset].style.map((x) => ({ ...x })); });
+      mutate('стиль', () => { scene.style = chain || presetStyle(preset); });
       return text(`Стиль: ${scene.style.map((x) => x.type).join(' → ') || 'без эффектов'}.`);
     },
   },

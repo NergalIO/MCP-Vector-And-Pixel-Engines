@@ -10,6 +10,23 @@ import { PASS_BG, modeInfo, dataPaint, floodFilter, grayHex, heightFilter, linOf
 import { nodeGeom, propValue } from './values.js';
 import { index } from './model.js';
 
+/**
+ * Значения свойств кадра, общие для всех проходов: propValue не зависит от режима (только от времени, состояний и IK),
+ * поэтому анимированные значения узла (дорожки, модификаторы) считаются один раз на кадр, а не в каждом из девяти
+ * проходов. Память — на индексе сцены (сбрасывается с ним), ключ — момент и состояния.
+ */
+function frameMemo(ctx, t, opts) {
+  const key = `${t}|${opts.states ? JSON.stringify(opts.states) : ''}`;
+  let f = ctx.c.frame;
+  if (!f || f.key !== key) ctx.c.frame = f = { key, nodes: new Map() };
+  return f.nodes;
+}
+function frameVals(fm, node, T, copy) {
+  let e = fm.get(node);
+  if (!e || e.T !== T || e.copy !== copy) fm.set(node, (e = { T, copy, v: new Map() }));
+  return e.v;
+}
+
 export function evalNode(node, t, ctx, key, copy, extraScale = 1) {
   const p = node.props || {};
   // временное окно и локальное время
@@ -36,7 +53,8 @@ export function evalNode(node, t, ctx, key, copy, extraScale = 1) {
     return out;
   }
   const T = lt;
-  const Pt = (n) => propValue(node, n, T, ctx, copy);
+  const mm = ctx.fm && (node.mods || node.keys) ? frameVals(ctx.fm, node, T, copy) : null;
+  const Pt = mm ? (n) => { let v = mm.get(n); if (v === undefined && !mm.has(n)) { v = propValue(node, n, T, ctx, copy); mm.set(n, v); } return v; } : (n) => propValue(node, n, T, ctx, copy);
   if (Pt('visible') === false) return null;
   let skipOwn = false;
   if (ctx.allowed && !ctx.inClip && !ctx.allowed.has(node.id)) { if (!ctx.ancestors.has(node.id)) return null; skipOwn = true; }
@@ -336,18 +354,22 @@ export function staticTree(c, n) {
   return s;
 }
 
+const sameLin = (a, b) => a === b || (a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3]);
 export function evalWithClip(node, t, ctx, key, copy) {
-  if (ctx.cache && !ctx.recording && !ctx.allowed && modeInfo(ctx.mode).cache && !ctx.inClip && copy === 0 && staticTree(ctx.c, node)) {
-    const ck = `${node.id}|${key}|${ctx.prefix}`;
+  const mi = modeInfo(ctx.mode);
+  if (ctx.cache && !ctx.recording && !ctx.allowed && (mi.cache || mi.data) && !ctx.inClip && copy === 0 && staticTree(ctx.c, node)) {
+    const ck = `${node.id}|${key}|${ctx.prefix}|${ctx.mode}`;
     const hit = ctx.c.evalCache.get(ck);
-    // вид кэшируется вместе с накопленным масштабом предков: от него зависит отсев «тонких» фигур
-    if (hit && hit.scale === ctx.scaleCur) { for (const d of hit.defs) ctx.addDef(d); return hit.el; }
+    // вид кэшируется вместе с накопленным масштабом предков (от него зависит отсев «тонких» фигур), а в проходах
+    // данных — ещё с унаследованной поверхностью (мемо resolveSurface: тот же объект у статичных предков),
+    // накопленной непрозрачностью и линейной частью матрицы (нормали картинок)
+    if (hit && hit.scale === ctx.scaleCur && (!mi.data || (hit.surf === ctx.surfCur && hit.op === ctx.opCur && sameLin(hit.lin, ctx.linCur)))) { for (const d of hit.defs) ctx.addDef(d); return hit.el; }
     const defs = [];
     ctx.recording = true; ctx.recorders.push(defs);
     let el;
     try { el = evalWithClipRaw(node, t, ctx, key, copy); }
     finally { ctx.recorders.pop(); ctx.recording = false; }
-    ctx.c.evalCache.set(ck, { el, defs, scale: ctx.scaleCur });
+    ctx.c.evalCache.set(ck, { el, defs, scale: ctx.scaleCur, surf: ctx.surfCur, op: ctx.opCur, lin: ctx.linCur });
     return el;
   }
   return evalWithClipRaw(node, t, ctx, key, copy);
@@ -391,6 +413,7 @@ export function flattenShapes(n, tf = '', out = []) {
 export function evaluate(scene, t, opts = {}) {
   const ctx = new Ctx(scene, opts);
   if (ctx.c.ik.length) solveIK(ctx, t);
+  ctx.fm = frameMemo(ctx, t, opts);
   const roots = ctx.c.children.get(null) || [];
   const body = [];
   for (const n of roots) {

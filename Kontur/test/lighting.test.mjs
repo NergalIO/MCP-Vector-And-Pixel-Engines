@@ -7,8 +7,9 @@ import { join } from 'node:path';
 import { resolveLighting, agx, hueTonemap, matchPalette, loadRefStats, renderLit } from '../mcp/lighting.mjs';
 import { prepareMaterials, applyMaterials } from '../mcp/materials.mjs';
 import { encodePNG } from '../mcp/normals.mjs';
-import { probeRaster } from '../mcp/render.mjs';
 import { buildWorld, toScene } from '../engine/world3d.js';
+import { needRaster } from './helpers/common.mjs';
+import { imageDiff } from './helpers/image.mjs';
 
 test('новые блоки света выключены по умолчанию, true даёт значения по умолчанию', () => {
   const st = resolveLighting({ lighting: { preset: 'golden' } });
@@ -83,7 +84,7 @@ test('фильтрация фактур: вдали муар гаснет, вб�
 });
 
 test('рендер со светом: paint, aerial, цветной AO и оба тонмаппера дают кадр', async (t) => {
-  if (!(await probeRaster())) { t.skip('нет растеризатора'); return; }
+  if (!(await needRaster(t))) return;
   const { S } = buildWorld({ width: 320, height: 180, camera3d: { hor: 60, charPx: 60, f: 260, dz: 2 }, seed: 3, items: [
     { type: 'ground', x: [-8, 8], z: [0, 40] },
     { type: 'box', x: [-1, 1], y: [0, 2], z: [6, 7], color: '#d88a9a' },
@@ -96,8 +97,7 @@ test('рендер со светом: paint, aerial, цветной AO и оба
     assert.equal(r.stats.paint, true);
     assert.equal(r.stats.aerial, true);
     assert.equal(r.stats.tonemap, tonemap);
-    let diff = 0;
-    for (let i = 0; i < r.image.data.length; i++) diff += Math.abs(r.image.data[i] - base.image.data[i]);
+    const diff = imageDiff(r.image.data, base.image.data).sum;
     assert.ok(diff > 0, `${tonemap}: кадр отличается от обычного`);
   }
 });

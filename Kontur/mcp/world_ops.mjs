@@ -2,6 +2,7 @@
 import { invalidate, nodeWorldMatrix, mat, toGeom, resolveSurface, surfaceAxes, subtreeOf } from '../engine/kontur.js';
 import { buildWorld, toNodes, Scene, materialPrims, unproject, camera, CAMERA_DEFAULT, fitCamera, MATERIALS, withSeed } from '../engine/world3d.js';
 import { MATERIAL_PRESETS } from './materials.mjs';
+import { nodeById, needNode } from './scene_util.mjs';
 
 /** id узла и всех его потомков (индекс движка). */
 export const subtreeIds = (scene, id) => new Set(subtreeOf(scene, id));
@@ -89,8 +90,8 @@ const worldOpts = (w) => ({ items: w.items, seed: w.seed, sky: w.sky, occ: w.occ
  * удалить (remove) или добавить новый (add). Мир пересобирается; неизменённые предметы берутся из кэша.
  */
 export function worldItemEdit(scene, { group = 'world', id, index, item, patch, remove, add } = {}) {
-  const g = scene.nodes.find((n) => n.id === group && n.props?.world3d);
-  if (!g) throw new Error(`Группа мира ${group} не найдена (world_build создаёт её)`);
+  const g = nodeById(scene, group);
+  if (!g?.props?.world3d) throw new Error(`Группа мира ${group} не найдена (world_build создаёт её)`);
   const w = g.props.world3d, items = w.items.slice();
   let i = -1;
   if (add) items.push(add);
@@ -152,8 +153,7 @@ const SHAPE_OF = (n) => {
 export function materialApply(scene, { id, material, color, options = {}, seed = 1, frame, mode, params } = {}) {
   if (mode === 'pixel') return materialApplyPixel(scene, { id, material, params });
   if (!MATERIALS.includes(material)) throw new Error(`Материал ${material}? Есть: ${MATERIALS.join(', ')}`);
-  const node = scene.nodes.find((n) => n.id === id);
-  if (!node) throw new Error(`Узел ${id} не найден`);
+  const node = needNode(scene, id);
   const s = surfaceOfNode(scene, id);
   if (!s?.plane) throw new Error(`У узла ${id} нет surface.plane — материалу не на что лечь (задайте surface_set или постройте грань world_build)`);
   const cam = camera(cameraOf(scene), scene.width);
@@ -208,8 +208,7 @@ export function materialApplyPixel(scene, { id, material, params }) {
   if (!def) throw new Error(`Материал ${material}: нет params и нет готового (есть: ${Object.keys(MATERIAL_PRESETS).join(', ')}${scene.materials ? `; в сцене: ${Object.keys(scene.materials).join(', ')}` : ''})`);
   scene.materials = { ...(scene.materials || {}), [material]: def };
   for (const nid of ids) {
-    const node = scene.nodes.find((n) => n.id === nid);
-    if (!node) throw new Error(`Узел ${nid} не найден`);
+    const node = needNode(scene, nid);
     node.props = { ...(node.props || {}), surface: { ...(typeof node.props?.surface === 'object' ? node.props.surface : {}), mat: material } };
     for (const old of [`${nid}_mat_clip`, `${nid}_mat`, `${nid}_matclip`]) if (scene.nodes.some((n) => n.id === old)) { const s = subtreeIds(scene, old); scene.nodes = scene.nodes.filter((n) => !s.has(n.id)); }
   }

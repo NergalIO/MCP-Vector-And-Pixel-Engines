@@ -5,16 +5,14 @@
  * прозрачностью и ссылками — для границ слоёв, проверок статичности и внешних бэкендов.
  */
 import { evaluate } from './evaluate.js';
+import { BoundedCache } from './cache.js';
+import { DEG, mat } from './math.js';
 
 /** Матрица [a, b, c, d, e, f] (как в SVG/Canvas). */
-export const IDENTITY = Object.freeze([1, 0, 0, 1, 0, 0]);
-export const matMul = (m, n) => [
-  m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
-  m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
-  m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5],
-];
-const RAD = Math.PI / 180;
-const tfCache = new Map();
+export const IDENTITY = Object.freeze(mat.id());
+export const matMul = mat.mul;
+const RAD = DEG;
+const tfCache = new BoundedCache(20000);
 /** Разбор атрибута transform (translate, rotate(a [cx cy]), scale, skewX, skewY, matrix) в матрицу. */
 export function parseTransform(s) {
   if (!s) return IDENTITY;
@@ -41,7 +39,6 @@ export function parseTransform(s) {
     }
     m = matMul(m, n);
   }
-  if (tfCache.size > 20000) tfCache.clear();
   tfCache.set(s, m);
   return m;
 }

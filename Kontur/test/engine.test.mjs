@@ -3,7 +3,7 @@
 import {
   createScene, ops, evaluate, renderSVG, treeToString, nodeWorldMatrix, mat, collectLights,
   diffScenes, applyEdits, editsEmpty, editsCount, quantizeRGBA, validateScene, invalidate, describeScene,
-  encodeNormal, encodePlaneD, resolveSurface, surfaceAxes, encodeMatId, materialIndex, cameraModel,
+  encodeNormal, encodePlaneD, resolveSurface, surfaceAxes, encodeMatId, materialIndex, cameraModel, makeRng,
 } from '../engine/kontur.js';
 import * as W3 from '../engine/world3d.js';
 
@@ -297,8 +297,7 @@ section('2.5D: normalGrad, lathe, matId, BVH, cameraModel');
   ok(encodeMatId(1) === '#000100' && encodeMatId(258) === '#010200' && materialIndex({ materials: { x: {}, y: {} } }).get('y') === 2, 'encodeMatId / materialIndex');
 
   // BVH против перебора: 10 000 лучей, треугольники с коробками
-  let sd = 11;
-  const rnd = () => ((sd = (sd * 16807) % 2147483647) / 2147483647);
+  const rnd = makeRng(11);
   const tris = [], boxes = [];
   for (let i = 0; i < 1500; i++) { const c = [rnd() * 20 - 10, rnd() * 6, rnd() * 20]; tris.push([0, 1, 2].map(() => [c[0] + rnd() - 0.5, c[1] + rnd() - 0.5, c[2] + rnd() - 0.5])); }
   for (let i = 0; i < 60; i++) { const x = rnd() * 20 - 10, y = rnd() * 4, z = rnd() * 20; boxes.push([x, x + rnd() * 1.5, y, y + rnd() * 1.5, z, z + rnd() * 1.5]); }

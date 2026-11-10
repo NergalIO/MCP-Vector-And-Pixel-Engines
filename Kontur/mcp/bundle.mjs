@@ -3,9 +3,10 @@
 // поэтому сборка — это склейка в порядке зависимостей без import/export и общий export в конце.
 //   import { bundleEngine } from './mcp/bundle.mjs';  bundleEngine() → строка модуля
 //   node mcp/bundle.mjs dist/kontur.js
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeFileEnsured } from './paths.mjs';
 
 const ENGINE = new URL('../engine/', import.meta.url);
 const read = (rel) => readFileSync(new URL(rel, ENGINE), 'utf8').replace(/\r\n/g, '\n');
@@ -53,7 +54,6 @@ export function engineNames() { bundleEngine(); return cache.names.slice(); }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const out = process.argv[2] || 'dist/kontur.js';
-  mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, bundleEngine());
+  writeFileEnsured(out, bundleEngine());
   console.log(`✓ ${out}`);
 }

@@ -6,19 +6,16 @@
 //   (щели и углы получают небо «сверху», а не по своей нормали); multiBounce — отскок света внутри щелей по альбедо.
 import { gauss, bilateral, zoom2 } from './filters.mjs';
 import { clamp01, pyRound, hash01 } from './util.mjs';
-import { rows, f32, u8 } from './pool.mjs';
-import { viaGPU } from './gpu.mjs';
+import { f32 } from './pool.mjs';
+import { halfOf, halves } from './gbuffer.mjs';
+import { viaRows } from './gpu.mjs';
 import { gpuGtao, gpuSsao } from './gpu-kernels.mjs';
 
 /** Прежний SSAO: Float32 n (1 — открыто). */
 export function ssao(G, o) {
   const { W, H, n, hw, hh, hn, mask, Px, Py, Pz, PNx, PNy, PNz } = G;
-  const hx = f32(hn), hy = f32(hn), hz = f32(hn), hnx = f32(hn), hny = f32(hn), hnz = f32(hn);
-  for (let y = 0; y < hh; y++) for (let x = 0; x < hw; x++) {
-    const i = 2 * y * W + 2 * x, j = y * hw + x;
-    if (mask[i]) { hx[j] = Px[i]; hy[j] = Py[i]; hz[j] = Pz[i]; } else { hx[j] = 0; hy[j] = 0; hz[j] = 1e4; }
-    hnx[j] = PNx[i]; hny[j] = PNy[i]; hnz[j] = PNz[i];
-  }
+  // вне маски — точка «бесконечно далеко» (0, 0, 1e4): она ничего не заслоняет
+  const hx = halfOf(G, Px, 0), hy = halfOf(G, Py, 0), hz = halfOf(G, Pz, 1e4), [hnx, hny, hnz] = halves(G, 'PNx', 'PNy', 'PNz');
   const occA = f32(hn), rad = o.radius ?? 0.9, offs = [];
   for (const r0 of [3, 8, 18, 34]) {
     const r = r0 * (W / 2560); // радиусы — пиксели половинного кадра шириной 2560 (эталон), масштабируются с шириной
@@ -29,7 +26,7 @@ export function ssao(G, o) {
   }
   const cnt = offs.length / 2;
   const sargs = { hw, hh, hx, hy, hz, hnx, hny, hnz, occA, rad, offs };
-  viaGPU('ao', hn, () => gpuSsao(sargs), () => rows(import.meta.url, kSsao, sargs, hh));
+  viaRows('ao', hn, () => gpuSsao(sargs), import.meta.url, kSsao, sargs, hh);
   const aoH = f32(hn);
   for (let j = 0; j < hn; j++) aoH[j] = 1 - clamp01((occA[j] / cnt) * 2.6);
   const ao = zoom2(gauss(aoH, hw, hh, 1.2), hw, hh, W, H);
@@ -46,16 +43,12 @@ export function gtao(G, o) {
   const { W, H, n, hw, hh, hn, mask, Px, Py, Pz, PNx, PNy, PNz, Nx, Ny, Nz, Dp } = G;
   const rad = o.radius ?? 0.9, dirs = Math.max(2, o.dirs | 0 || 4), steps = Math.max(3, o.steps | 0 || 8), fall0 = rad * clamp01(o.falloff ?? 0.6), bias = o.bias ?? 0.04;
   const fHalf = G.cam.f / 2, maxPx = 64 * Math.max(1, hw / 960);
-  const hm = u8(hn), hx = f32(hn), hy = f32(hn), hz = f32(hn), hnx = f32(hn), hny = f32(hn), hnz = f32(hn), hD = f32(hn);
-  for (let y = 0; y < hh; y++) for (let x = 0; x < hw; x++) {
-    const i = 2 * y * W + 2 * x, j = y * hw + x;
-    hm[j] = mask[i]; hx[j] = Px[i]; hy[j] = Py[i]; hz[j] = Pz[i]; hnx[j] = PNx[i]; hny[j] = PNy[i]; hnz[j] = PNz[i]; hD[j] = Dp[i];
-  }
+  const [hm, hx, hy, hz, hnx, hny, hnz, hD] = halves(G, 'mask', 'Px', 'Py', 'Pz', 'PNx', 'PNy', 'PNz', 'Dp');
   const vis = f32(hn).fill(1);
   const wantBent = o.bent !== false;
   const bx = wantBent ? f32(hn) : null, by = wantBent ? f32(hn) : null, bz = wantBent ? f32(hn) : null;
   const gargs = { hw, hh, hm, hx, hy, hz, hnx, hny, hnz, hD, vis, bx, by, bz, wantBent, rad, dirs, steps, fall0, bias, fHalf, maxPx };
-  viaGPU('ao', hn, () => gpuGtao(gargs), () => rows(import.meta.url, kGtao, gargs, hh));
+  viaRows('ao', hn, () => gpuGtao(gargs), import.meta.url, kGtao, gargs, hh);
   const sc = Math.max(1, hw / 960), sig = (o.denoise ?? 1) * 1.6 * sc;
   const up = (a) => zoom2(bilateral(a, hw, hh, sig, hD, hnx, hny, hnz, hm), hw, hh, W, H);
   const ao = up(vis), s = o.strength ?? 1, chm = G.chm;

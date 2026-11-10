@@ -20,6 +20,36 @@ export const f32 = (n) => alloc(Float32Array, n);
 export const u8 = (n) => alloc(Uint8Array, n);
 export const u16 = (n) => alloc(Uint16Array, n);
 export const i32 = (n) => alloc(Int32Array, n);
+/**
+ * Арена кадра: большие поля кадра (G-буфер, половинные поля, цвет) берутся из прошлых кадров вместо новых
+ * SharedArrayBuffer (их выделение и сборка мусора на десятках мегабайт за кадр заметны). Буферы арендуются:
+ * кадр берёт их через arena.f32(n) и т. п. и возвращает release() в конце, поэтому одновременные кадры получают разные.
+ * zero = false — без обнуления (поле целиком перезаписывается). В свободных списках остаются только размеры
+ * последнего кадра (смена разрешения не копит старые).
+ */
+const arenaFree = new Map(); // `${тип}|${длина}` → [массивы]
+export function frameArena() {
+  const taken = [];
+  const get = (Ctor, n, zero = true) => {
+    const k = `${Ctor.name}|${n}`, a = arenaFree.get(k)?.pop();
+    const out = a ? (zero ? a.fill(0) : a) : alloc(Ctor, n);
+    taken.push([k, out]);
+    return out;
+  };
+  return {
+    f32: (n, zero) => get(Float32Array, n, zero),
+    u8: (n, zero) => get(Uint8Array, n, zero),
+    u16: (n, zero) => get(Uint16Array, n, zero),
+    release() {
+      const keys = new Set(taken.map(([k]) => k));
+      for (const k of arenaFree.keys()) if (!keys.has(k)) arenaFree.delete(k);
+      for (const [k, a] of taken) { if (!arenaFree.has(k)) arenaFree.set(k, []); arenaFree.get(k).push(a); }
+      taken.length = 0;
+    },
+  };
+}
+/** Без арены: новые массивы (тот же интерфейс). */
+export const NO_ARENA = { f32: (n) => f32(n), u8: (n) => u8(n), u16: (n) => u16(n), release() {} };
 /** Копия typed array в общей памяти. */
 export const sharedCopy = (a) => { const s = alloc(a.constructor, a.length); s.set(a); return s; };
 const isShared = (v) => SAB && v.buffer instanceof SAB;

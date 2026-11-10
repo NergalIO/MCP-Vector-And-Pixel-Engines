@@ -1,32 +1,25 @@
 // Ядра отложенного света на WebGPU (WGSL) — те же формулы, что у процессорных kGauss*/kBilateral/kGtao/kSsao/kGather/
 // kSun*/kShadeSun/kPaint, но во float32 (кадр совпадает с процессорным в пределах округления). Вызываются через
 // viaGPU (gpu.mjs) с запасным путём на процессоре. Маски Uint8 идут на GPU как есть (по 4 в u32).
-import { gpuExec, uniforms, groups2 } from './gpu.mjs';
+import { gpuExec, uniforms, groups2, GPU_DUMMY } from './gpu.mjs';
+import { binds, CONSTS, U01, JROUND, REFL, MASK } from './wgsl.mjs';
 import { f32 } from './pool.mjs';
 
-const COMMON = /* wgsl */ `
-const PI = 3.14159265358979;
-const INF = 3.0e38;
+const COMMON = CONSTS + U01 + JROUND + /* wgsl */ `
 // hash01 из util.mjs (целочисленная часть та же, деление — по старшим 24 битам: точно во float32)
 fn hash01(i: u32, s: u32) -> f32 {
   var h = (i ^ (s * 0x9e3779b1u)) * 0x85ebca6bu;
   h = h ^ (h >> 13u); h = h * 0xc2b2ae35u; h = h ^ (h >> 16u);
-  return f32(h >> 8u) / 16777216.0;
+  return u01(h);
 }
-// Math.round (половина — вверх), а не round() WGSL (к чётному)
-fn jround(v: f32) -> i32 { return i32(floor(v + 0.5)); }
 `;
-/** Чтение маски Uint8 (имя привязки m). */
-const MASK = /* wgsl */ `fn mk(i: u32) -> bool { return ((m[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu) != 0u; }`;
-const store = (b, i, t = 'f32', rw = false) => `@group(0) @binding(${i}) var<storage, ${rw ? 'read_write' : 'read'}> ${b}: array<${t}>;`;
-const binds = (list) => list.map(([name, t, rw], k) => store(name, k + 1, t, rw)).join('\n');
 
 /* ---------------- гаусс ---------------- */
 const GAUSS = COMMON + /* wgsl */ `
 struct U { w: u32, h: u32, r: i32, dir: u32 }
 @group(0) @binding(0) var<uniform> p: U;
 ${binds([['src'], ['o', 'f32', true], ['k']])}
-fn refl(i: i32, n: i32) -> i32 { var j = i; loop { if (j >= 0 && j < n) { break; } if (j < 0) { j = -j - 1; } else { j = 2 * n - j - 1; } } return j; }
+${REFL}
 @compute @workgroup_size(16, 16) fn main(@builtin(global_invocation_id) g: vec3u) {
   if (g.x >= p.w || g.y >= p.h) { return; }
   let x = i32(g.x); let y = i32(g.y); let w = i32(p.w); let h = i32(p.h);
@@ -134,10 +127,10 @@ fn fall(d: f32) -> f32 {
 }`;
 /** Основной цикл GTAO (kGtao): vis и изогнутая нормаль bx/by/bz на половинной сетке. */
 export function gpuGtao({ hw, hh, hm, hx, hy, hz, hnx, hny, hnz, hD, vis, bx, by, bz, wantBent, rad, dirs, steps, fall0, bias, fHalf, maxPx }) {
-  const hn = hw * hh, dummy = { bytes: 16 };
+  const hn = hw * hh;
   gpuExec({ key: 'gtao', code: GTAO, bufs: [{ data: hm }, { data: hx }, { data: hy }, { data: hz }, { data: hnx }, { data: hny }, { data: hnz }, { data: hD }, { data: vis, io: 'inout' },
-    wantBent ? { data: bx, io: 'inout' } : dummy, wantBent ? { data: by, io: 'inout' } : dummy, wantBent ? { data: bz, io: 'inout' } : dummy], passes: [
-    { entry: 'main', uni: uniforms([['u', hw], ['u', hh], ['u', dirs], ['u', steps], ['u', wantBent ? 1 : 0], ['f', rad], ['f', fall0], ['f', bias], ['f', fHalf], ['f', maxPx]]), bind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], groups: groups2(hw, hh) },
+    wantBent ? { data: bx, io: 'inout' } : GPU_DUMMY, wantBent ? { data: by, io: 'inout' } : GPU_DUMMY, wantBent ? { data: bz, io: 'inout' } : GPU_DUMMY], passes: [
+    { entry: 'main', uni: uniforms([['u', hw], ['u', hh], ['u', dirs], ['u', steps], ['u', wantBent ? 1 : 0], ['f', rad], ['f', fall0], ['f', bias], ['f', fHalf], ['f', maxPx]]), groups: groups2(hw, hh) },
   ] });
   return hn;
 }
@@ -165,7 +158,7 @@ ${binds([['hx'], ['hy'], ['hz'], ['hnx'], ['hny'], ['hnz'], ['occ', 'f32', true]
 /** Сумма заслонения SSAO (kSsao) по смещениям offs в occA. */
 export function gpuSsao({ hw, hh, hx, hy, hz, hnx, hny, hnz, occA, rad, offs }) {
   gpuExec({ key: 'ssao', code: SSAO, bufs: [{ data: hx }, { data: hy }, { data: hz }, { data: hnx }, { data: hny }, { data: hnz }, { data: occA, io: 'out' }, { data: Int32Array.from(offs) }], passes: [
-    { entry: 'main', uni: uniforms([['u', hw], ['u', hh], ['u', offs.length / 2], ['f', rad]]), bind: [0, 1, 2, 3, 4, 5, 6, 7], groups: groups2(hw, hh) },
+    { entry: 'main', uni: uniforms([['u', hw], ['u', hh], ['u', offs.length / 2], ['f', rad]]), groups: groups2(hw, hh) },
   ] });
 }
 
@@ -205,7 +198,7 @@ ${MASK}
 export function gpuGather({ hw, hh, hm, hx, hy, hz, hnx, hny, hnz, src, out, radii, dirs, kk, salt, rad }) {
   gpuExec({ key: 'gather', code: GATHER, bufs: [{ data: hm }, { data: hx }, { data: hy }, { data: hz }, { data: hnx }, { data: hny }, { data: hnz }, { data: src[0] }, { data: src[1] }, { data: src[2] },
     { data: out[0], io: 'out' }, { data: out[1], io: 'out' }, { data: out[2], io: 'out' }, { data: Float32Array.from(radii) }], passes: [
-    { entry: 'main', uni: uniforms([['u', hw], ['u', hh], ['u', dirs], ['u', radii.length], ['u', salt], ['f', kk], ['f', rad]]), bind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], groups: groups2(hw, hh) },
+    { entry: 'main', uni: uniforms([['u', hw], ['u', hh], ['u', dirs], ['u', radii.length], ['u', salt], ['f', kk], ['f', rad]]), groups: groups2(hw, hh) },
   ] });
 }
 
@@ -219,7 +212,7 @@ ${MASK}
 fn bhash(seed: u32, q: u32) -> f32 {
   var h = seed ^ ((q + 1u) * 0x9e3779b1u);
   h = (h ^ (h >> 16u)) * 0x85ebca6bu; h = (h ^ (h >> 13u)) * 0xc2b2ae35u;
-  return f32((h ^ (h >> 16u)) >> 8u) / 16777216.0;
+  return u01(h ^ (h >> 16u));
 }
 fn inv(d: f32) -> f32 { return 1.0 / select(d, 1e-9, abs(d) < 1e-9); }
 fn hitPrim(q: u32, o: vec3f, d: vec3f, tmax: f32) -> f32 {
@@ -291,11 +284,11 @@ fn trav(o: vec3f, d: vec3f, tmax: f32, any: bool, seed: u32) -> f32 {
 }`;
 /** Лучи теней солнца (kSunHard / kSunSoft) по массивам BVH (bvh.data). soft: T1, T2, tanH, f, pen. */
 export function gpuSun({ W, hw, mask, PNx, PNy, PNz, Px, Py, Pz, Dp, L, shH, bvh, soft, T1 = [0, 0, 0], T2 = [0, 0, 0], tanH = 0, f = 0, pen }) {
-  const hh = shH.length / hw, dummy = { bytes: 16 };
-  gpuExec({ key: 'sun', code: SUN, bufs: [{ data: mask }, { data: PNx }, { data: PNy }, { data: PNz }, { data: Px }, { data: Py }, { data: Pz }, Dp ? { data: Dp } : dummy,
-    { data: shH, io: 'inout' }, soft ? { data: pen, io: 'inout' } : dummy, { data: bvh.T }, { data: bvh.A }, { data: bvh.B }, { data: bvh.idx }, { data: bvh.NB }, { data: bvh.NC }], passes: [
+  const hh = shH.length / hw;
+  gpuExec({ key: 'sun', code: SUN, bufs: [{ data: mask }, { data: PNx }, { data: PNy }, { data: PNz }, { data: Px }, { data: Py }, { data: Pz }, Dp ? { data: Dp } : GPU_DUMMY,
+    { data: shH, io: 'inout' }, soft ? { data: pen, io: 'inout' } : GPU_DUMMY, { data: bvh.T }, { data: bvh.A }, { data: bvh.B }, { data: bvh.idx }, { data: bvh.NB }, { data: bvh.NC }], passes: [
     { entry: 'main', uni: uniforms([['u', W], ['u', hw], ['u', hh], ['u', bvh.nt], ['u', bvh.n], ['u', soft ? 1 : 0], ['f', L[0]], ['f', L[1]], ['f', L[2]],
-      ['f', T1[0]], ['f', T1[1]], ['f', T1[2]], ['f', T2[0]], ['f', T2[1]], ['f', T2[2]], ['f', tanH], ['f', f]]), bind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], groups: groups2(hw, hh) },
+      ['f', T1[0]], ['f', T1[1]], ['f', T1[2]], ['f', T2[0]], ['f', T2[1]], ['f', T2[2]], ['f', tanH], ['f', f]]), groups: groups2(hw, hh) },
   ] });
 }
 
@@ -331,12 +324,12 @@ fn multiBounce(a: f32, alb: f32) -> f32 {
 }`;
 /** Окружающий свет, солнце и блик (kShadeSun): light и specT (n·3). */
 export function gpuShadeSun({ W, Nx, Ny, Nz, Px, Py, Pz, spec, direct, light, specT, camX, camY, camZ, L, sunC, specI, amb }) {
-  const H = Nx.length / W, dummy = { bytes: 16 }, aoC = amb.aoC || [0, 0, 0];
+  const H = Nx.length / W, aoC = amb.aoC || [0, 0, 0];
   gpuExec({ key: 'shade', code: SHADE, bufs: [{ data: Nx }, { data: Ny }, { data: Nz }, { data: Px }, { data: Py }, { data: Pz }, { data: spec }, { data: direct }, { data: amb.ao },
-    amb.by ? { data: amb.by } : dummy, amb.mb ? { data: amb.lin } : dummy, { data: light, io: 'out' }, { data: specT, io: 'out' }], passes: [
+    amb.by ? { data: amb.by } : GPU_DUMMY, amb.mb ? { data: amb.lin } : GPU_DUMMY, { data: light, io: 'out' }, { data: specT, io: 'out' }], passes: [
     { entry: 'main', uni: uniforms([['u', W], ['u', H], ['u', amb.by ? 1 : 0], ['u', amb.aoC ? 1 : 0], ['u', amb.mb ? 1 : 0], ['f', camX], ['f', camY], ['f', camZ], ['f', L[0]], ['f', L[1]], ['f', L[2]],
       ['f', sunC[0]], ['f', sunC[1]], ['f', sunC[2]], ['f', specI], ['f', amb.skyC[0]], ['f', amb.skyC[1]], ['f', amb.skyC[2]], ['f', amb.gC[0]], ['f', amb.gC[1]], ['f', amb.gC[2]], ['f', aoC[0]], ['f', aoC[1]], ['f', aoC[2]]]),
-    bind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], groups: groups2(W, H) },
+    groups: groups2(W, H) },
   ] });
 }
 
@@ -383,7 +376,7 @@ export function gpuPaint({ W, H, R, q, alpha, Es, Fs, Gs, img, out, pts }) {
   const P = new Float32Array(pts.length * 3);
   pts.forEach((t, k) => { P[k * 3] = t[0]; P[k * 3 + 1] = t[1]; P[k * 3 + 2] = t[2]; });
   gpuExec({ key: 'paint', code: PAINT, bufs: [{ data: Es }, { data: Fs }, { data: Gs }, { data: img }, { data: out, io: 'out' }, { data: P }], passes: [
-    { entry: 'main', uni: uniforms([['u', W], ['u', H], ['u', pts.length], ['f', R], ['f', q], ['f', alpha]]), bind: [0, 1, 2, 3, 4, 5], groups: groups2(W, H) },
+    { entry: 'main', uni: uniforms([['u', W], ['u', H], ['u', pts.length], ['f', R], ['f', q], ['f', alpha]]), groups: groups2(W, H) },
   ] });
 }
 
@@ -439,6 +432,6 @@ export function gpuLamps({ W, H, Nx, Ny, Nz, Px, Py, Pz, spec, lampL, specT, cam
     if (l.vis) { Ls.set([vn, l.vis.w, l.vis.x0, l.vis.y0, 1], b + 11); vis.set(l.vis.data, vn); vn += l.vis.data.length; }
   });
   gpuExec({ key: 'lamps', code: LAMPS, bufs: [{ data: Nx }, { data: Ny }, { data: Nz }, { data: Px }, { data: Py }, { data: Pz }, { data: spec }, { data: lampL, io: 'inout' }, { data: specT, io: 'inout' }, { data: Ls }, { data: vis }], passes: [
-    { entry: 'main', uni: uniforms([['u', W], ['u', H], ['u', lamps.length], ['f', specI], ['f', camX], ['f', camY], ['f', camZ]]), bind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], groups: groups2(W, H) },
+    { entry: 'main', uni: uniforms([['u', W], ['u', H], ['u', lamps.length], ['f', specI], ['f', camX], ['f', camY], ['f', camZ]]), groups: groups2(W, H) },
   ] });
 }

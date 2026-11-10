@@ -5,6 +5,7 @@
  * pattern, marker, анимация SMIL — о них говорят предупреждения.
  */
 import { NAMED } from './color.js';
+import { mat, r3, r4 } from './math.js';
 import { parsePath } from './geom.js';
 import { IDENTITY, matMul, parseTransform } from './ir.js';
 import { index, invalidate as invalidateAll } from './model.js';
@@ -118,7 +119,6 @@ const siLen = (v, ref = 100, def = 0) => {
   if (s.endsWith('in')) return n * 96;
   return n;
 };
-const r4 = (v) => Math.round(v * 1e4) / 1e4;
 
 /** Цвет SVG → строка движка (hex или rgba), с прозрачностью alpha. null — нет краски. */
 function siColor(v, alpha, style) {
@@ -161,16 +161,7 @@ const SVG_NAMED = {
  * Разложить матрицу [a b c d e f] в трансформацию движка: translate · rotate · skewX · scale.
  * Точно для любой невырожденной матрицы (отражение — отрицательный scaleY).
  */
-export function decomposeMatrix(m) {
-  const [a, b, c, d, e, f] = m;
-  const sx = Math.hypot(a, b);
-  if (sx < 1e-12) return { x: e, y: f, rotation: 0, scaleX: 0, scaleY: 0, skewX: 0 };
-  const th = Math.atan2(b, a), cs = Math.cos(th), sn = Math.sin(th);
-  const c2 = cs * c + sn * d, d2 = -sn * c + cs * d;
-  const sy = d2;
-  const skew = Math.abs(sy) > 1e-12 ? Math.atan(c2 / sy) : 0;
-  return { x: e, y: f, rotation: (th * 180) / Math.PI, scaleX: sx, scaleY: sy, skewX: (skew * 180) / Math.PI };
-}
+export const decomposeMatrix = mat.decompose;
 function siTransformProps(m) {
   const t = decomposeMatrix(m), out = {};
   if (Math.abs(t.x) > 1e-6) out.x = r4(t.x);
@@ -210,7 +201,7 @@ export function importSVG(src, opts = {}) {
   const vb = siNums(svg.attrs.viewBox);
   const W = siLen(svg.attrs.width, 100, vb.length === 4 ? vb[2] : 300), H = siLen(svg.attrs.height, 100, vb.length === 4 ? vb[3] : 150);
   const viewBox = vb.length === 4 && vb[2] > 0 && vb[3] > 0 ? vb : [0, 0, W, H];
-  const width = Math.round(viewBox[2] * 1000) / 1000, height = Math.round(viewBox[3] * 1000) / 1000;
+  const width = r3(viewBox[2]), height = r3(viewBox[3]);
 
   const nodes = [];
   const taken = new Set(opts.taken || []);

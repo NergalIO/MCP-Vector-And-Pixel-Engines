@@ -8,6 +8,7 @@ import { makeScene } from '../examples/ref/common.mjs';
 import { renderLit, renderPasses } from '../mcp/lighting.mjs';
 import { probeRaster } from '../mcp/render.mjs';
 import { encodePNG, decodePNG } from '../mcp/normals.mjs';
+import { imageDiff } from './helpers/image.mjs';
 
 const ref = resolve(dirname(fileURLToPath(import.meta.url)), '../examples/ref');
 const args = process.argv.slice(2);
@@ -43,9 +44,8 @@ for (const c of cases) {
   let note = '';
   if (cmp && existsSync(resolve(cmp, `${c.id}.png`))) {
     const a = decodePNG(readFileSync(resolve(cmp, `${c.id}.png`))), b = c.opts.debug ? decodePNG(buf) : r.image;
-    let mx = 0, cnt = 0;
     if (a.width !== b.width || a.height !== b.height) { note = ' РАЗМЕР'; bad++; }
-    else { for (let i = 0; i < a.data.length; i++) { const d = Math.abs(a.data[i] - b.data[i]); if (d) { cnt++; if (d > mx) mx = d; } } note = cnt ? ` diff max ${mx}, ${cnt} каналов` : ' =='; if (mx > 2) bad++; }
+    else { const { max: mx, count: cnt } = imageDiff(a.data, b.data); note = cnt ? ` diff max ${mx}, ${cnt} каналов` : ' =='; if (mx > 2) bad++; }
   }
   console.log(`${c.id.padEnd(16)} ${h} ${String(r.stats.ms).padStart(6)} мс${note}`);
 }

@@ -1,5 +1,6 @@
 /** Цвета: разбор CSS, OKLab, смешивание. */
 import { clamp, lerp, r3 } from './math.js';
+import { BoundedCache } from './cache.js';
 
 export const NAMED = {
   black: '#000000', white: '#ffffff', red: '#ff0000', green: '#008000', lime: '#00ff00', blue: '#0000ff',
@@ -9,7 +10,7 @@ export const NAMED = {
   turquoise: '#40e0d0', tomato: '#ff6347', orchid: '#da70d6', skyblue: '#87ceeb', hotpink: '#ff69b4',
   transparent: 'rgba(0,0,0,0)',
 };
-export const colorCache = new Map();
+export const colorCache = new BoundedCache(50000);
 /** Разбор цвета в [r,g,b,a] (0..1, sRGB) или null. */
 export function parseColor(s) {
   if (typeof s !== 'string') return null;
@@ -48,7 +49,6 @@ export function parseColor(s) {
     }
   }
   if (out && out.some((v) => Number.isNaN(v))) out = null;
-  if (colorCache.size > 2000) colorCache.clear();
   colorCache.set(s, out);
   return out;
 }

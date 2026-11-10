@@ -2,6 +2,7 @@
 // Граница — reflect, как у scipy.ndimage (перенос эскизов render.py без смены кадра).
 // Гаусс и билатеральный считаются полосами строк на всех ядрах (pool.mjs) или на видеокарте (KONTUR_GPU, gpu.mjs).
 import { rows, f32 } from './pool.mjs';
+import { bilin } from './util.mjs';
 import { viaGPU } from './gpu.mjs';
 import { gpuGauss, gpuBilateral } from './gpu-kernels.mjs';
 
@@ -102,38 +103,52 @@ export function uniform(src, w, h, size) {
 export function zoom2(a, hw, hh, w, h) {
   const o = f32(w * h), W2 = hw * 2, H2 = hh * 2;
   const kx = (hw - 1) / Math.max(1, W2 - 1), ky = (hh - 1) / Math.max(1, H2 - 1);
-  for (let y = 0; y < h; y++) {
+  rows(import.meta.url, kZoom2, { a, o, hw, hh, w, kx, ky }, h);
+  return o;
+}
+/** Билинейная выборка поля a (ширина sw) между четырьмя соседями — общая для увеличений. */
+const bilerp = (a, sw, x0, x1, y0, y1, tx, ty) => bilin(a[y0 * sw + x0], a[y0 * sw + x1], a[y1 * sw + x0], a[y1 * sw + x1], tx, ty);
+/** Полоса строк y0…y1 увеличения вдвое (выравнивание по углам, как scipy zoom). */
+export function kZoom2({ a, o, hw, hh, w, kx, ky }, ya, yb) {
+  for (let y = ya; y < yb; y++) {
     const fy = y * ky, y0 = Math.floor(fy), y1 = Math.min(hh - 1, y0 + 1), ty = fy - y0;
     for (let x = 0; x < w; x++) {
-      const fx = x * kx, x0 = Math.floor(fx), x1 = Math.min(hw - 1, x0 + 1), tx = fx - x0;
-      o[y * w + x] = (a[y0 * hw + x0] * (1 - tx) + a[y0 * hw + x1] * tx) * (1 - ty) + (a[y1 * hw + x0] * (1 - tx) + a[y1 * hw + x1] * tx) * ty;
+      const fx = x * kx, x0 = Math.floor(fx), x1 = Math.min(hw - 1, x0 + 1);
+      o[y * w + x] = bilerp(a, hw, x0, x1, y0, y1, fx - x0, ty);
     }
   }
-  return o;
 }
 
 /** Билинейное увеличение из sw×sh (шаг f пикселей) в w×h. */
 export function upF(a, sw, sh, f, w, h) {
-  const o = new Float32Array(w * h);
-  for (let y = 0; y < h; y++) {
+  const o = f32(w * h);
+  rows(import.meta.url, kUpF, { a, o, sw, sh, f, w }, h);
+  return o;
+}
+/** Полоса строк увеличения upF (по центрам пикселей, с обрезкой у края). */
+export function kUpF({ a, o, sw, sh, f, w }, ya, yb) {
+  for (let y = ya; y < yb; y++) {
     const fy = Math.min(sh - 1, Math.max(0, (y + 0.5) / f - 0.5)), y0 = Math.floor(fy), y1 = Math.min(sh - 1, y0 + 1), ty = fy - y0;
     for (let x = 0; x < w; x++) {
-      const fx = Math.min(sw - 1, Math.max(0, (x + 0.5) / f - 0.5)), x0 = Math.floor(fx), x1 = Math.min(sw - 1, x0 + 1), tx = fx - x0;
-      o[y * w + x] = (a[y0 * sw + x0] * (1 - tx) + a[y0 * sw + x1] * tx) * (1 - ty) + (a[y1 * sw + x0] * (1 - tx) + a[y1 * sw + x1] * tx) * ty;
+      const fx = Math.min(sw - 1, Math.max(0, (x + 0.5) / f - 0.5)), x0 = Math.floor(fx), x1 = Math.min(sw - 1, x0 + 1);
+      o[y * w + x] = bilerp(a, sw, x0, x1, y0, y1, fx - x0, ty);
     }
   }
-  return o;
 }
 
 /** Расширение маски линий (max в окне 3×3). */
 export function dilate3(a, w, h) {
-  const o = new Float32Array(w * h);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+  const o = f32(w * h);
+  rows(import.meta.url, kDilate3, { a, o, w, h }, h);
+  return o;
+}
+/** Полоса строк расширения 3×3. */
+export function kDilate3({ a, o, w, h }, ya, yb) {
+  for (let y = ya; y < yb; y++) for (let x = 0; x < w; x++) {
     let m = 0;
     for (let dy = -1; dy <= 1; dy++) { const yy = y + dy; if (yy < 0 || yy >= h) continue; for (let dx = -1; dx <= 1; dx++) { const xx = x + dx; if (xx < 0 || xx >= w) continue; const v = a[yy * w + xx]; if (v > m) m = v; } }
     o[y * w + x] = m;
   }
-  return o;
 }
 
 /** Каналы RGB (interleaved n·3) → три плоскости и обратно. */

@@ -1,9 +1,9 @@
 // Kontur world3d — Перевод построенной сцены в узлы Kontur (toNodes, toScene).
 import { sub, add, mul, sub2 } from './geom.js';
+import { mat, r3, r4, roundTo } from '../kontur.js';
 
 /* ============================== В УЗЛЫ KONTUR ============================== */
-const r1 = (v) => Math.round(v * 10) / 10;
-const r4 = (v) => Math.round(v * 1e4) / 1e4;
+const r1 = (v) => roundTo(v, 1);
 const same3 = (a, b) => a && b && Math.abs(a[0] - b[0]) < 1e-4 && Math.abs(a[1] - b[1]) < 1e-4 && Math.abs(a[2] - b[2]) < 1e-4;
 const plEq = (a, b) => a && b && same3(a, b) && Math.abs(a[3] - b[3]) < 1e-4;
 
@@ -104,7 +104,7 @@ export function toNodes(S, opts = {}) {
       if (L.from) o.from = L.from.map(r1); if (L.to) o.to = L.to.map(r1); if (L.c) o.c = L.c.map(r1);
       if (L.r != null) o.r = Array.isArray(L.r) ? L.r.map(r1) : r1(L.r);
       if (L.flat) o.flat = L.flat; if (L.ch) o.ch = L.ch;
-      if (L.stops) o.stops = L.stops.map(([t, n]) => [r4(t), n.map((v) => Math.round(v * 1000) / 1000)]);
+      if (L.stops) o.stops = L.stops.map(([t, n]) => [r4(t), n.map(r3)]);
       return o;
     };
     return Array.isArray(ng) ? ng.map(r) : r(ng);
@@ -179,11 +179,9 @@ export function toNodes(S, opts = {}) {
 }
 /** Линейная матрица [a, b, c, d] → rotation, skewX, scaleX, scaleY узла (как decompose в world_ops). */
 function decompose2([a, b, c, d]) {
-  const r = Math.atan2(b, a), sx = Math.hypot(a, b), cs = Math.cos(r), sn = Math.sin(r);
-  const c2 = cs * c + sn * d, sy = -sn * c + cs * d;
-  const out = { rotation: +((r * 180) / Math.PI).toFixed(3), scaleX: +sx.toFixed(5), scaleY: +sy.toFixed(5) };
-  const sk = (Math.atan(c2 / (sy || 1e-12)) * 180) / Math.PI;
-  if (Math.abs(sk) > 0.01) out.skewX = +sk.toFixed(3);
+  const t = mat.decompose([a, b, c, d, 0, 0]);
+  const out = { rotation: +t.rotation.toFixed(3), scaleX: +t.scaleX.toFixed(5), scaleY: +t.scaleY.toFixed(5) };
+  if (Math.abs(t.skewX) > 0.01) out.skewX = +t.skewX.toFixed(3);
   return out;
 }
 /** Полная сцена Kontur из построителя: размеры, камера, фон-небо, узлы. extra — поля сцены (lighting, style, …). */

@@ -2,8 +2,8 @@
 // treeToString после серии кадров со сменой структуры), CanvasRenderer на записывающем контексте, resolve().
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { DOMRenderer, CanvasRenderer, evaluate, treeToString, resolve, parseTransform, createScene, ops, filterTemplate } from '../engine/kontur.js';
+import { ex } from './helpers/common.mjs';
 
 /* ---------- поддельный DOM: ровно то, что нужно DOMRenderer ---------- */
 class El {
@@ -32,7 +32,6 @@ const ser = (e) => {
   return `<${e.tagName}${a}>${e.childNodes.map(ser).join('')}</${e.tagName}>`;
 };
 globalThis.document = { createElementNS: (ns, tag) => new El(tag) };
-const ex = (n) => JSON.parse(readFileSync(new URL(`../examples/${n}.json`, import.meta.url), 'utf8'));
 // атрибуты в DOM идут в порядке установки; сверяем как множества на каждом элементе
 const canon = (s) => s.replace(/<(\w+)((?: [\w:-]+="[^"]*")*)(\/?)>/g, (_, t, a, sl) => `<${t}${(a.match(/ [\w:-]+="[^"]*"/g) || []).sort().join('')}${sl}>`);
 const expected = (tree) => canon(treeToString({ ...tree, attrs: { ...tree.attrs, width: null, height: null } }));

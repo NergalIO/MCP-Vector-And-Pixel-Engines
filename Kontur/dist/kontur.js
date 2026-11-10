@@ -12,7 +12,13 @@ const clamp = (v, a = 0, b = 1) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, u) => a + (b - a) * u;
 const TAU = Math.PI * 2;
 const DEG = Math.PI / 180;
+/** Округление до d знаков после запятой. */
+const roundTo = (n, d) => { const k = 10 ** d; return Math.round(n * k) / k; };
+/** Отдельный поток ГСЧ Парка — Миллера от сида s (своё состояние у каждого потока). */
+const pmStep = (x) => (x * 16807) % 2147483647;
+const makeRng = (s = 1) => { let x = s; return () => (x = pmStep(x)) / 2147483647; };
 const r3 = (n) => Math.round(n * 1000) / 1000;
+const r4 = (n) => roundTo(n, 4);
 const FRAC = Array.from({ length: 1000 }, (_, f) => (f ? '.' + String(f).padStart(3, '0').replace(/0+$/, '') : ''));
 /**
  * Строка числа, округлённого до 0,001 — то же, что String(r3(n)), но без медленного dtoa:
@@ -71,6 +77,15 @@ function hashStr(s) {
 const fmt = (n) => (typeof n === 'number' ? r3(n) : n);
 
 
+/** Векторы 3D (массивы [x, y, z]). */
+const vec3 = {
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  mul: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+};
+
 const mat = {
   id: () => [1, 0, 0, 1, 0, 0],
   mul: (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]],
@@ -85,6 +100,20 @@ const mat = {
     // R·K = [cs, sn, cs·k − sn, sn·k + cs]
     const a = cs * scaleX, b = sn * scaleX, c = (cs * k - sn) * scaleY, d = (sn * k + cs) * scaleY;
     return [a, b, c, d, x - (a * anchorX + c * anchorY), y - (b * anchorX + d * anchorY)];
+  },
+  /**
+   * Разложить [a b c d e f] в трансформацию узла: translate · rotate · skewX · scale (обратное compose без якоря).
+   * Точно для любой невырожденной матрицы (отражение — отрицательный scaleY); вырожденная: нулевой столбец x —
+   * нули, нулевой scaleY — без наклона.
+   */
+  decompose: (m) => {
+    const [a, b, c, d, e, f] = m;
+    const sx = Math.hypot(a, b);
+    if (sx < 1e-12) return { x: e, y: f, rotation: 0, scaleX: 0, scaleY: 0, skewX: 0 };
+    const th = Math.atan2(b, a), cs = Math.cos(th), sn = Math.sin(th);
+    const c2 = cs * c + sn * d, sy = -sn * c + cs * d;
+    const skew = Math.abs(sy) > 1e-12 ? Math.atan(c2 / sy) : 0;
+    return { x: e, y: f, rotation: (th * 180) / Math.PI, scaleX: sx, scaleY: sy, skewX: (skew * 180) / Math.PI };
   },
 };
 
@@ -236,8 +265,60 @@ function resolveEase(e) {
   throw new Error(`Неизвестная кривая сглаживания: ${JSON.stringify(e)}`);
 }
 
+/* ---- core/cache.js ---- */
+/** Общие кеши движка. */
+
+/**
+ * Map с ограничением размера: по числу записей или по суммарному весу (weight(key, value), например длина строки).
+ * При переполнении вытесняются самые старые записи (порядок вставки), пока не останется 3/4 предела, — а не весь кеш
+ * разом: сброс целиком заставлял большие сцены (тысячи путей и цветов) пересчитывать всё на каждом кадре.
+ */
+class BoundedCache extends Map {
+  constructor(limit, weight = null) {
+    super();
+    this.limit = limit;
+    this.weight = weight;
+    this.total = 0;
+  }
+  w(k, v) { return this.weight ? this.weight(k, v) : 1; }
+  set(k, v) {
+    if (super.has(k)) this.total -= this.w(k, super.get(k));
+    super.set(k, v);
+    this.total += this.w(k, v);
+    if (this.total > this.limit) this.trim();
+    return this;
+  }
+  trim() {
+    for (const [k, v] of super.entries()) {
+      if (this.total <= this.limit * 0.75) break;
+      super.delete(k);
+      this.total -= this.w(k, v);
+    }
+  }
+  delete(k) {
+    if (super.has(k)) this.total -= this.w(k, super.get(k));
+    return super.delete(k);
+  }
+  clear() { super.clear(); this.total = 0; }
+}
+
+/**
+ * Запоминание чистой функции одного объектного аргумента (WeakMap: запись живёт, пока жив объект).
+ * Для объектов, которые не меняются на месте (геометрия из кеша путей, поверхности узлов).
+ */
+function memoByObject(fn) {
+  const memo = new WeakMap();
+  return (o) => {
+    if (o === null || typeof o !== 'object') return fn(o);
+    let v = memo.get(o);
+    if (v === undefined) { v = fn(o); memo.set(o, v); }
+    return v;
+  };
+}
+
 /* ---- core/color.js ---- */
 /** Цвета: разбор CSS, OKLab, смешивание. */
+
 
 const NAMED = {
   black: '#000000', white: '#ffffff', red: '#ff0000', green: '#008000', lime: '#00ff00', blue: '#0000ff',
@@ -247,7 +328,7 @@ const NAMED = {
   turquoise: '#40e0d0', tomato: '#ff6347', orchid: '#da70d6', skyblue: '#87ceeb', hotpink: '#ff69b4',
   transparent: 'rgba(0,0,0,0)',
 };
-const colorCache = new Map();
+const colorCache = new BoundedCache(50000);
 /** Разбор цвета в [r,g,b,a] (0..1, sRGB) или null. */
 function parseColor(s) {
   if (typeof s !== 'string') return null;
@@ -286,7 +367,6 @@ function parseColor(s) {
     }
   }
   if (out && out.some((v) => Number.isNaN(v))) out = null;
-  if (colorCache.size > 2000) colorCache.clear();
   colorCache.set(s, out);
   return out;
 }
@@ -327,6 +407,7 @@ function mixColor(ca, cb, u) {
 /* ---- core/geom.js ---- */
 /** Геометрия: разбор путей, фигуры, морфинг, измерение, деформация.
  * Геометрия = массив подпутей { x0, y0, segs: [[c1x,c1y,c2x,c2y,x,y], ...], closed } */
+
 
 const lineSeg = (x0, y0, x, y) => [x0 + (x - x0) / 3, y0 + (y - y0) / 3, x0 + (2 * (x - x0)) / 3, y0 + (2 * (y - y0)) / 3, x, y];
 
@@ -369,7 +450,12 @@ function arcToCubics(x1, y1, rx, ry, phi, fa, fs, x2, y2) {
   return out;
 }
 
-const pathCache = new Map();
+/**
+ * Кеш разобранных путей: d → геометрия. Ограничен суммарной длиной строк (а не числом записей: в больших сценах
+ * десятки тысяч путей, и сброс по счёту заставлял разбирать каждый путь заново на каждом проходе). Переполнение —
+ * вытесняются самые старые записи.
+ */
+const pathCache = new BoundedCache(16e6, (d) => d.length);
 /** Разбор SVG path d → геометрия. Поддерживает M L H V C S Q T A Z (абс./отн.). */
 function parsePath(d) {
   if (pathCache.has(d)) return pathCache.get(d);
@@ -442,18 +528,41 @@ function parsePath(d) {
     prevC = nextC; prevQ = nextQ;
   }
   const out = subs.filter((s) => s.segs.length > 0);
-  if (pathCache.size > 1000) pathCache.clear();
   pathCache.set(d, out);
   return out;
 }
 
+/** Отрезок, заданный кривой (lineSeg): контрольные точки — на трети и двух третях прямой из (x, y). */
+const isLineSeg = (x, y, c) => {
+  const e = 1e-9 * (1 + Math.abs(x) + Math.abs(y) + Math.abs(c[4]) + Math.abs(c[5]));
+  return Math.abs(c[0] - (x + (c[4] - x) / 3)) <= e && Math.abs(c[1] - (y + (c[5] - y) / 3)) <= e
+    && Math.abs(c[2] - (x + (2 * (c[4] - x)) / 3)) <= e && Math.abs(c[3] - (y + (2 * (c[5] - y)) / 3)) <= e;
+};
+const pathStr = new WeakMap();
+/**
+ * Геометрия → строка d. Прямые отрезки пишутся как L (а не кривой из шести чисел), замыкающий отрезок перед Z
+ * не пишется — d короче в разы, а SVG кадра быстрее разбирает растеризатор. Строка кешируется на объекте геометрии
+ * (геометрия из кеша путей — одна и та же между проходами и кадрами; менять её на месте нельзя).
+ */
 function geomToPath(g) {
+  const hit = pathStr.get(g);
+  if (hit !== undefined) return hit;
   let s = '';
   for (const sp of g) {
     s += 'M' + num3(sp.x0) + ' ' + num3(sp.y0);
-    for (const c of sp.segs) s += 'C' + num3(c[0]) + ' ' + num3(c[1]) + ' ' + num3(c[2]) + ' ' + num3(c[3]) + ' ' + num3(c[4]) + ' ' + num3(c[5]);
+    let x = sp.x0, y = sp.y0;
+    const segs = sp.segs, last = segs.length - 1;
+    for (let k = 0; k <= last; k++) {
+      const c = segs[k];
+      if (isLineSeg(x, y, c)) {
+        // замыкающий отрезок к началу контура рисует сам Z
+        if (!(k === last && sp.closed && Math.abs(c[4] - sp.x0) < 1e-9 && Math.abs(c[5] - sp.y0) < 1e-9)) s += 'L' + num3(c[4]) + ' ' + num3(c[5]);
+      } else s += 'C' + num3(c[0]) + ' ' + num3(c[1]) + ' ' + num3(c[2]) + ' ' + num3(c[3]) + ' ' + num3(c[4]) + ' ' + num3(c[5]);
+      x = c[4]; y = c[5];
+    }
     if (sp.closed) s += 'Z';
   }
+  if (g && typeof g === 'object') pathStr.set(g, s);
   return s;
 }
 
@@ -655,7 +764,7 @@ function pairSubpaths(a, b) {
   }
   return [a, b];
 }
-const morphCache = new Map();
+const morphCache = new BoundedCache(500);
 /** Готовит две геометрии к попарной интерполяции (одинаковое число сегментов, выравнивание старта). */
 function prepareMorph(ga, gb, key) {
   if (key && morphCache.has(key)) return morphCache.get(key);
@@ -670,7 +779,7 @@ function prepareMorph(ga, gb, key) {
     if (!b) { const [cx, cy] = centroid(a); b = { x0: cx, y0: cy, segs: a.segs.map(() => [cx, cy, cx, cy, cx, cy]), closed: a.closed }; }
     pairs.push(pairSubpaths(a, b));
   }
-  if (key) { if (morphCache.size > 500) morphCache.clear(); morphCache.set(key, pairs); }
+  if (key) morphCache.set(key, pairs);
   return pairs;
 }
 function lerpGeom(pairs, u) {
@@ -753,8 +862,9 @@ function deformGeom(g, { amount = 10, scale = 0.01, speed = 0.5, seed = 0, detai
   });
 }
 
-/** Габариты геометрии по опорным точкам (для отбрасывания вырожденных фигур). */
-function geomBox(geom) {
+/** Габариты геометрии по опорным точкам (для отбрасывания вырожденных фигур); запоминаются на объекте геометрии. */
+const geomBox = memoByObject(geomBoxRaw);
+function geomBoxRaw(geom) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const sp of geom) {
     if (sp.x0 < x0) x0 = sp.x0; if (sp.x0 > x1) x1 = sp.x0; if (sp.y0 < y0) y0 = sp.y0; if (sp.y0 > y1) y1 = sp.y0;
@@ -998,6 +1108,17 @@ function cacheFor(scene) {
 function invalidate(scene) { sceneCaches.delete(scene); }
 
 /**
+ * Значение, производное от всей сцены (сериализация, сводки), — посчитать один раз и держать, пока сцену не изменили:
+ * живёт в тех же кэшах, что и индекс, поэтому сбрасывается invalidate / invalidateNode и заменой массива узлов.
+ */
+function sceneMemo(scene, key, make) {
+  const c = index(scene);
+  const m = c.memo || (c.memo = new Map());
+  if (!m.has(key)) m.set(key, make(scene));
+  return m.get(key);
+}
+
+/**
  * Сбросить только то, что зависит от узла id (его свойства, ключи или модификаторы изменились, а id, родитель,
  * тип, маски и IK — нет): пружины, дорожки, статичный кэш узла, предков и тех, кто ссылается на узел.
  * Если индекса ещё нет или узел неизвестен — полный сброс.
@@ -1013,6 +1134,7 @@ function invalidateNode(scene, id) {
   const drop = new Set();
   for (const x of touched) for (let p = x; p != null && !drop.has(p); p = c.byId.get(p)?.parent ?? null) drop.add(p);
   for (const x of drop) c.stat.delete(x);
+  c.frame = null; c.memo = null;
   if (c.evalCache.size) for (const k of [...c.evalCache.keys()]) if (drop.has(k.slice(0, k.indexOf('|')))) c.evalCache.delete(k);
   if (touched.size > 1) c.springs.clear();
   else for (const k of [...c.springs.keys()]) if (k.startsWith(id + '|')) c.springs.delete(k);
@@ -1384,7 +1506,7 @@ const policy = { allowJS: typeof window !== 'undefined' || envTrust() };
 function setExprPolicy(p = {}) { if ('allowJS' in p) policy.allowJS = !!p.allowJS; exprCache.clear(); return { ...policy }; }
 const exprPolicy = () => ({ ...policy });
 
-const exprCache = new Map();
+const exprCache = new BoundedCache(2000);
 const JS_OFF = 'JS-выражения выключены (безопасный режим): код выходит за подмножество выражений. Разрешить: KONTUR_TRUST_EXPR=1 или setExprPolicy({ allowJS: true })';
 /**
  * Функция выражения expr. strict — для добавления модификатора: код, требующий JS при выключенном JS,
@@ -1404,7 +1526,6 @@ function compileExpr(code, { strict = false } = {}) {
     else if (strict) throw new Error(`${JS_OFF}. Не поддержано: ${safeErr.message}`);
     else { fn = () => undefined; fn.disabled = `${JS_OFF}. ${safeErr.message}`; }
   }
-  if (exprCache.size > 2000) exprCache.clear();
   exprCache.set(key, fn);
   return fn;
 }
@@ -1697,6 +1818,7 @@ const addTo = (v, d) => (typeof v === 'number' ? v + d : Array.isArray(v) ? v.ma
 
 
 
+
 /** Настройки рельефа по умолчанию (режим высот для карт нормалей). */
 const RELIEF_DEFAULT = { height: 0.5, depth: 0.3, bevel: 8, profile: 'round', luma: 0.25, background: 0 };
 function paintAlpha(v) {
@@ -1768,14 +1890,7 @@ const PASS_MODES = Object.keys(RENDER_MODES).filter((k) => RENDER_MODES[k].data)
 const PASS_BG = Object.fromEntries(PASS_MODES.map((k) => [k, RENDER_MODES[k].bg ?? null]));
 const isPassMode = (m) => PASS_MODES.includes(m) || (typeof m === 'string' && m.startsWith('mask:') && m.length > 5);
 const SURF_INHERIT = ['plane', 'normal', 'normalGrad', 'u', 'v', 'spec', 'emissive', 'mat', 'tag', 'sky'];
-const v3 = {
-  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
-  mul: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
-  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
-  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
-  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
-};
-const vec3 = v3;
+const v3 = vec3;
 const isVec3 = (a) => Array.isArray(a) && a.length >= 3 && a.slice(0, 3).every((x) => typeof x === 'number' && Number.isFinite(x));
 /** Оси грани по нормали: u — «вдоль» (горизонталь), v — «вверх по грани». Для пола u = X, v = +Z (вглубь). */
 function surfaceAxes(n) {
@@ -1785,9 +1900,25 @@ function surfaceAxes(n) {
   u = v3.norm(u);
   return { u, v: v3.norm(v3.cross(u, n)) };
 }
-/** Действующая поверхность узла: наследуемое от предков + своё. own === false — узел без поверхности. */
+/**
+ * Действующая поверхность узла: наследуемое от предков + своё. own === false — узел без поверхности.
+ * Чистая функция пары объектов: результат запоминается (WeakMap по родителю, затем по своей), поэтому у статичных
+ * узлов поверхность каждого кадра и прохода — тот же объект. Результат не изменять.
+ */
+const surfMemo = new WeakMap();
+const NO_SURF = {};
 function resolveSurface(parent, own) {
   if (own === false) return null;
+  if (own != null && typeof own !== 'object') return resolveSurfaceRaw(parent, own);
+  const pk = parent || NO_SURF;
+  let m = surfMemo.get(pk);
+  if (!m) surfMemo.set(pk, (m = new WeakMap()));
+  const ok = own || NO_SURF;
+  let s = m.get(ok);
+  if (s === undefined) m.set(ok, (s = resolveSurfaceRaw(parent, own)));
+  return s;
+}
+function resolveSurfaceRaw(parent, own) {
   const s = {};
   if (parent) for (const k of SURF_INHERIT) if (parent[k] !== undefined) s[k] = parent[k];
   const has = own && typeof own === 'object';
@@ -1859,10 +1990,11 @@ function normalGradLayers(ng) {
   return out;
 }
 /** Краски слоёв градиента нормали в проходе normal: url(#…) на слой (первый — обычный, остальные — lighten). */
+// слои с ключами общих определений: по объекту градиента (у статичного узла — один и тот же), без JSON на каждый кадр
+const keyedLayers = memoByObject((ng) => normalGradLayers(ng).map((L) => ({ L, key: `ng|${JSON.stringify(L)}` })));
 function normalGradPaints(ctx, ng) {
-  return normalGradLayers(ng).map((L) => {
+  return keyedLayers(ng).map(({ L, key }) => {
     const keep = [L.ch.includes('x'), L.ch.includes('y'), L.ch.includes('z')];
-    const key = `ng|${JSON.stringify(L)}`;
     if (ctx.patterns.has(key)) return ctx.reuse(key);
     const stops = L.stops.map(([t, n]) => {
       const nn = keep[0] && keep[1] && keep[2] ? v3.norm(n) : n;
@@ -2347,6 +2479,23 @@ function collectLights(scene, t = 0, opts = {}) {
 
 
 
+/**
+ * Значения свойств кадра, общие для всех проходов: propValue не зависит от режима (только от времени, состояний и IK),
+ * поэтому анимированные значения узла (дорожки, модификаторы) считаются один раз на кадр, а не в каждом из девяти
+ * проходов. Память — на индексе сцены (сбрасывается с ним), ключ — момент и состояния.
+ */
+function frameMemo(ctx, t, opts) {
+  const key = `${t}|${opts.states ? JSON.stringify(opts.states) : ''}`;
+  let f = ctx.c.frame;
+  if (!f || f.key !== key) ctx.c.frame = f = { key, nodes: new Map() };
+  return f.nodes;
+}
+function frameVals(fm, node, T, copy) {
+  let e = fm.get(node);
+  if (!e || e.T !== T || e.copy !== copy) fm.set(node, (e = { T, copy, v: new Map() }));
+  return e.v;
+}
+
 function evalNode(node, t, ctx, key, copy, extraScale = 1) {
   const p = node.props || {};
   // временное окно и локальное время
@@ -2373,7 +2522,8 @@ function evalNode(node, t, ctx, key, copy, extraScale = 1) {
     return out;
   }
   const T = lt;
-  const Pt = (n) => propValue(node, n, T, ctx, copy);
+  const mm = ctx.fm && (node.mods || node.keys) ? frameVals(ctx.fm, node, T, copy) : null;
+  const Pt = mm ? (n) => { let v = mm.get(n); if (v === undefined && !mm.has(n)) { v = propValue(node, n, T, ctx, copy); mm.set(n, v); } return v; } : (n) => propValue(node, n, T, ctx, copy);
   if (Pt('visible') === false) return null;
   let skipOwn = false;
   if (ctx.allowed && !ctx.inClip && !ctx.allowed.has(node.id)) { if (!ctx.ancestors.has(node.id)) return null; skipOwn = true; }
@@ -2673,18 +2823,22 @@ function staticTree(c, n) {
   return s;
 }
 
+const sameLin = (a, b) => a === b || (a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3]);
 function evalWithClip(node, t, ctx, key, copy) {
-  if (ctx.cache && !ctx.recording && !ctx.allowed && modeInfo(ctx.mode).cache && !ctx.inClip && copy === 0 && staticTree(ctx.c, node)) {
-    const ck = `${node.id}|${key}|${ctx.prefix}`;
+  const mi = modeInfo(ctx.mode);
+  if (ctx.cache && !ctx.recording && !ctx.allowed && (mi.cache || mi.data) && !ctx.inClip && copy === 0 && staticTree(ctx.c, node)) {
+    const ck = `${node.id}|${key}|${ctx.prefix}|${ctx.mode}`;
     const hit = ctx.c.evalCache.get(ck);
-    // вид кэшируется вместе с накопленным масштабом предков: от него зависит отсев «тонких» фигур
-    if (hit && hit.scale === ctx.scaleCur) { for (const d of hit.defs) ctx.addDef(d); return hit.el; }
+    // вид кэшируется вместе с накопленным масштабом предков (от него зависит отсев «тонких» фигур), а в проходах
+    // данных — ещё с унаследованной поверхностью (мемо resolveSurface: тот же объект у статичных предков),
+    // накопленной непрозрачностью и линейной частью матрицы (нормали картинок)
+    if (hit && hit.scale === ctx.scaleCur && (!mi.data || (hit.surf === ctx.surfCur && hit.op === ctx.opCur && sameLin(hit.lin, ctx.linCur)))) { for (const d of hit.defs) ctx.addDef(d); return hit.el; }
     const defs = [];
     ctx.recording = true; ctx.recorders.push(defs);
     let el;
     try { el = evalWithClipRaw(node, t, ctx, key, copy); }
     finally { ctx.recorders.pop(); ctx.recording = false; }
-    ctx.c.evalCache.set(ck, { el, defs, scale: ctx.scaleCur });
+    ctx.c.evalCache.set(ck, { el, defs, scale: ctx.scaleCur, surf: ctx.surfCur, op: ctx.opCur, lin: ctx.linCur });
     return el;
   }
   return evalWithClipRaw(node, t, ctx, key, copy);
@@ -2728,6 +2882,7 @@ function flattenShapes(n, tf = '', out = []) {
 function evaluate(scene, t, opts = {}) {
   const ctx = new Ctx(scene, opts);
   if (ctx.c.ik.length) solveIK(ctx, t);
+  ctx.fm = frameMemo(ctx, t, opts);
   const roots = ctx.c.children.get(null) || [];
   const body = [];
   for (const n of roots) {
@@ -2788,19 +2943,193 @@ function pixelOf(scene) {
   return { size: p.size, palette: p.palette || null, aa: !!p.aa };
 }
 
+/* ---- core/ir.js ---- */
+/**
+ * Промежуточное представление кадра: плоский список отображения из дерева evaluate.
+ * Дерево {tag, attrs, children} остаётся общим источником для бэкендов (SVG-строка — treeToString, DOM —
+ * DOMRenderer, Canvas — CanvasRenderer); resolve() даёт тот же кадр как список фигур с итоговыми матрицами,
+ * прозрачностью и ссылками — для границ слоёв, проверок статичности и внешних бэкендов.
+ */
+
+
+
+/** Матрица [a, b, c, d, e, f] (как в SVG/Canvas). */
+const IDENTITY = Object.freeze(mat.id());
+const matMul = mat.mul;
+const RAD = DEG;
+const tfCache = new BoundedCache(20000);
+/** Разбор атрибута transform (translate, rotate(a [cx cy]), scale, skewX, skewY, matrix) в матрицу. */
+function parseTransform(s) {
+  if (!s) return IDENTITY;
+  let m = tfCache.get(s);
+  if (m) return m;
+  m = IDENTITY;
+  const re = /(matrix|translate|rotate|scale|skewX|skewY)\s*\(([^)]*)\)/g;
+  let x;
+  while ((x = re.exec(s))) {
+    const a = x[2].split(/[\s,]+/).filter(Boolean).map(Number);
+    let n;
+    switch (x[1]) {
+      case 'matrix': n = a.length === 6 ? a : IDENTITY; break;
+      case 'translate': n = [1, 0, 0, 1, a[0] || 0, a[1] || 0]; break;
+      case 'scale': n = [a[0] ?? 1, 0, 0, a[1] ?? a[0] ?? 1, 0, 0]; break;
+      case 'rotate': {
+        const r = (a[0] || 0) * RAD, c = Math.cos(r), sn = Math.sin(r);
+        n = [c, sn, -sn, c, 0, 0];
+        if (a.length >= 3) n = matMul(matMul([1, 0, 0, 1, a[1], a[2]], n), [1, 0, 0, 1, -a[1], -a[2]]);
+        break;
+      }
+      case 'skewX': n = [1, 0, Math.tan((a[0] || 0) * RAD), 1, 0, 0]; break;
+      case 'skewY': n = [1, Math.tan((a[0] || 0) * RAD), 0, 1, 0, 0]; break;
+    }
+    m = matMul(m, n);
+  }
+  tfCache.set(s, m);
+  return m;
+}
+/** id из url(#id) или null. */
+const urlRef = (v) => { const m = /^url\(#([^)]+)\)$/.exec(String(v || '')); return m ? m[1] : null; };
+/** Определения кадра (defs) по id. */
+function defsOf(tree) {
+  const out = new Map();
+  const walk = (n) => { if (n.attrs?.id) out.set(n.attrs.id, n); for (const c of n.children || []) walk(c); };
+  for (const c of tree.children || []) if (c.tag === 'defs') walk(c);
+  return out;
+}
+const DRAWABLE = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'image']);
+
+/**
+ * Плоский список отображения кадра: [{ id, tag, attrs, matrix, opacity, clip[], mask[], filter[], blend }] в порядке
+ * рисования. id — ближайший узел сцены (data-node), clip/mask/filter — стеки id определений от предков.
+ * opts — как у evaluate; tree — уже вычисленное дерево (не пересчитывать).
+ */
+function resolve(scene, t, opts = {}, tree = null) {
+  tree = tree || evaluate(scene, t, opts);
+  const items = [];
+  const vb = String(tree.attrs.viewBox || `0 0 ${scene.width} ${scene.height}`).split(/\s+/).map(Number);
+  const walk = (n, st) => {
+    if (n.tag === 'defs' || n.tag === 'clipPath' || n.tag === 'mask' || n.tag === 'pattern' || n.tag === 'filter') return;
+    const a = n.attrs || {};
+    let m = st.m, op = st.op, id = st.id, clip = st.clip, mask = st.mask, filter = st.filter, blend = st.blend;
+    if (a.transform) m = matMul(m, parseTransform(a.transform));
+    if (n.tag === 'svg' && n !== tree && a.viewBox) {
+      const [vx, vy, vw, vh] = String(a.viewBox).split(/\s+/).map(Number);
+      m = matMul(m, [(+a.width || vw) / vw, 0, 0, (+a.height || vh) / vh, (+a.x || 0) - vx * ((+a.width || vw) / vw), (+a.y || 0) - vy * ((+a.height || vh) / vh)]);
+    }
+    if (a.opacity != null) op *= +a.opacity;
+    if (a['data-node']) id = a['data-node'];
+    const cp = urlRef(a['clip-path']); if (cp) clip = [...clip, cp];
+    const mk = urlRef(a.mask); if (mk) mask = [...mask, mk];
+    const fl = urlRef(a.filter); if (fl) filter = [...filter, fl];
+    const bm = /mix-blend-mode:\s*([\w-]+)/.exec(a.style || ''); if (bm) blend = bm[1];
+    if (DRAWABLE.has(n.tag)) items.push({ id, tag: n.tag, attrs: a, text: n.text, matrix: m, opacity: op, clip, mask, filter, blend });
+    const s2 = { m, op, id, clip, mask, filter, blend };
+    for (const c of n.children || []) walk(c, s2);
+  };
+  for (const c of tree.children || []) walk(c, { m: IDENTITY, op: 1, id: null, clip: [], mask: [], filter: [], blend: null });
+  return { width: scene.width, height: scene.height, viewBox: vb, defs: defsOf(tree), items, tree };
+}
+
 /* ---- core/svg.js ---- */
 /** Сериализация дерева отображения в SVG. */
 
-const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+
+const NEEDS_ESC = /[&<>"]/;
+/** Экранирование для XML. Сначала одна проверка: в путях и числах (почти все атрибуты) экранировать нечего. */
+const esc = (s) => { s = String(s); return NEEDS_ESC.test(s) ? s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') : s; };
 function treeToString(n) {
   let a = '';
   for (const k in n.attrs) { const v = n.attrs[k]; if (v != null && v !== '') a += ` ${k}="${esc(v)}"`; }
   if (n.text != null) return `<${n.tag}${a}>${esc(n.text)}</${n.tag}>`;
   if (!n.children || !n.children.length) return `<${n.tag}${a}/>`;
-  return `<${n.tag}${a}>${n.children.map(treeToString).join('')}</${n.tag}>`;
+  let s = `<${n.tag}${a}>`;
+  for (const c of n.children) s += treeToString(c);
+  return s + `</${n.tag}>`;
 }
 /** SVG-строка кадра. */
 function renderSVG(scene, t, opts = {}) { return treeToString(evaluate(scene, t, opts)); }
+
+/* ---------- краски цвета фона ---------- */
+const PAINTS = ['fill', 'stroke', 'stop-color', 'flood-color', 'lighting-color'];
+const SHAPES = new Set(['path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline', 'text', 'tspan', 'textPath']);
+// источники цвета помимо красок: картинки, фильтры (матрицы цвета и arithmetic дают новые цвета), CSS
+const OPAQUE = new Set(['image', 'feImage', 'filter', 'style', 'foreignObject', 'use']);
+/**
+ * Проверка «краска v — цвета фона bg»: none, прозрачная, тот же цвет или url(#id) на определение (градиент, паттерн)
+ * из defs, которое само рисует только цветом фона (вместе с его href); неизвестная ссылка — «другой цвет».
+ */
+function bgPaint(bg, tree) {
+  const ref = parseColor(bg);
+  if (!ref) return null;
+  const defs = defsOf(tree), seen = new Map();
+  const same = (v) => {
+    if (v === 'none') return true;
+    if (v.startsWith('url(')) {
+      const def = defs.get(urlRef(v));
+      if (!def) return false;
+      if (!seen.has(def)) { seen.set(def, false); seen.set(def, allBg(def, null, same) && hrefBg(def)); } // false — защита от циклов
+      return seen.get(def);
+    }
+    const c = parseColor(v);
+    return !!c && (c[3] === 0 || (Math.abs(c[0] - ref[0]) < 0.002 && Math.abs(c[1] - ref[1]) < 0.002 && Math.abs(c[2] - ref[2]) < 0.002));
+  };
+  const hrefBg = (def) => { const h = def.attrs?.href || def.attrs?.['xlink:href']; return !h || same(`url(${h})`); };
+  return same;
+}
+/**
+ * Всё поддерево рисует только цветом фона? Нет картинок, фильтров, стилей с краской; отсутствующий fill у фигуры —
+ * чёрный (умолчание SVG, fill — унаследованный от предков). Ложное «нет» безопасно, поэтому сомнительное
+ * (currentColor, style) считается другим цветом.
+ */
+function allBg(n, fill, same) {
+  if (OPAQUE.has(n.tag)) return false;
+  const a = n.attrs || {};
+  if (a.style && /fill|stroke|color|blend/.test(a.style)) return false;
+  for (const k of PAINTS) { const v = a[k]; if (v != null && v !== '' && !same(String(v))) return false; }
+  if (a.fill != null && a.fill !== '') fill = a.fill;
+  if (fill == null && SHAPES.has(n.tag) && !same('#000000')) return false;
+  if (n.tag === 'stop' && (a['stop-color'] == null || a['stop-color'] === '') && !same('#000000')) return false; // остановка без цвета — чёрная
+  for (const c of n.children || []) if (!allBg(c, fill, same)) return false;
+  return true;
+}
+/** Корень кадра: defs и прямоугольник фона (его не трогаем) и тело. */
+const isBgRect = (n, bg) => n.tag === 'rect' && n.attrs?.fill === bg && n.attrs.x === 0 && n.attrs.y === 0;
+
+/**
+ * Убрать невидимое: всё, что рисует цветом фона bg до первой краски другого цвета, ложится фоном на фон и ничего
+ * не меняет (обычное наложение ассоциативно, прозрачность, клипы и маски группы этого не нарушают; группы с фильтром
+ * не трогаем). Растеризатор упирается в заливку, поэтому в проходах данных (тысячи чёрных фигур под свечением,
+ * маской персонажей) это прямо сокращает растр. Дерево не изменяется (в нём поддеревья из кэша кадра) — изменённые
+ * узлы копируются. Возвращает { tree, dropped, solid } — solid: тело пусто, кадр одного цвета.
+ */
+function dropUnderBg(tree, bg) {
+  const same = bgPaint(bg, tree);
+  if (!same) return { tree, dropped: 0, solid: false };
+  let open = true, dropped = 0;
+  const visit = (n, fill) => {
+    if (!open) return n;
+    if (allBg(n, fill, same)) { dropped++; return null; }
+    const a = n.attrs || {};
+    if (a.filter || OPAQUE.has(n.tag) || n.text != null || !n.children?.length) { open = false; return n; }
+    const f = a.fill != null && a.fill !== '' ? a.fill : fill;
+    let changed = false;
+    const kids = [];
+    for (const c of n.children) { const r = visit(c, f); if (r !== c) changed = true; if (r) kids.push(r); }
+    return changed ? { ...n, children: kids } : n;
+  };
+  const out = [];
+  let changed = false, body = 0;
+  for (const c of tree.children) {
+    if (c.tag === 'defs' || (open && isBgRect(c, bg))) { out.push(c); continue; }
+    const r = visit(c, null);
+    if (r !== c) changed = true;
+    if (r) { out.push(r); body++; }
+  }
+  return { tree: changed ? { ...tree, children: out } : tree, dropped, solid: body === 0 };
+}
+/** Кадр заведомо одного цвета bg (каждая краска — цвета фона, нет картинок и фильтров)? */
+const isSolid = (tree, bg) => dropUnderBg(tree, bg).solid;
 
 /* ---- core/ops.js ---- */
 /** Операции над сценой (MCP-сервер и редактор), клипы, состояния, IK, пиксели. */
@@ -3340,96 +3669,6 @@ class Player {
   }
 }
 
-/* ---- core/ir.js ---- */
-/**
- * Промежуточное представление кадра: плоский список отображения из дерева evaluate.
- * Дерево {tag, attrs, children} остаётся общим источником для бэкендов (SVG-строка — treeToString, DOM —
- * DOMRenderer, Canvas — CanvasRenderer); resolve() даёт тот же кадр как список фигур с итоговыми матрицами,
- * прозрачностью и ссылками — для границ слоёв, проверок статичности и внешних бэкендов.
- */
-
-/** Матрица [a, b, c, d, e, f] (как в SVG/Canvas). */
-const IDENTITY = Object.freeze([1, 0, 0, 1, 0, 0]);
-const matMul = (m, n) => [
-  m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
-  m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
-  m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5],
-];
-const RAD = Math.PI / 180;
-const tfCache = new Map();
-/** Разбор атрибута transform (translate, rotate(a [cx cy]), scale, skewX, skewY, matrix) в матрицу. */
-function parseTransform(s) {
-  if (!s) return IDENTITY;
-  let m = tfCache.get(s);
-  if (m) return m;
-  m = IDENTITY;
-  const re = /(matrix|translate|rotate|scale|skewX|skewY)\s*\(([^)]*)\)/g;
-  let x;
-  while ((x = re.exec(s))) {
-    const a = x[2].split(/[\s,]+/).filter(Boolean).map(Number);
-    let n;
-    switch (x[1]) {
-      case 'matrix': n = a.length === 6 ? a : IDENTITY; break;
-      case 'translate': n = [1, 0, 0, 1, a[0] || 0, a[1] || 0]; break;
-      case 'scale': n = [a[0] ?? 1, 0, 0, a[1] ?? a[0] ?? 1, 0, 0]; break;
-      case 'rotate': {
-        const r = (a[0] || 0) * RAD, c = Math.cos(r), sn = Math.sin(r);
-        n = [c, sn, -sn, c, 0, 0];
-        if (a.length >= 3) n = matMul(matMul([1, 0, 0, 1, a[1], a[2]], n), [1, 0, 0, 1, -a[1], -a[2]]);
-        break;
-      }
-      case 'skewX': n = [1, 0, Math.tan((a[0] || 0) * RAD), 1, 0, 0]; break;
-      case 'skewY': n = [1, Math.tan((a[0] || 0) * RAD), 0, 1, 0, 0]; break;
-    }
-    m = matMul(m, n);
-  }
-  if (tfCache.size > 20000) tfCache.clear();
-  tfCache.set(s, m);
-  return m;
-}
-/** id из url(#id) или null. */
-const urlRef = (v) => { const m = /^url\(#([^)]+)\)$/.exec(String(v || '')); return m ? m[1] : null; };
-/** Определения кадра (defs) по id. */
-function defsOf(tree) {
-  const out = new Map();
-  const walk = (n) => { if (n.attrs?.id) out.set(n.attrs.id, n); for (const c of n.children || []) walk(c); };
-  for (const c of tree.children || []) if (c.tag === 'defs') walk(c);
-  return out;
-}
-const DRAWABLE = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'image']);
-
-/**
- * Плоский список отображения кадра: [{ id, tag, attrs, matrix, opacity, clip[], mask[], filter[], blend }] в порядке
- * рисования. id — ближайший узел сцены (data-node), clip/mask/filter — стеки id определений от предков.
- * opts — как у evaluate; tree — уже вычисленное дерево (не пересчитывать).
- */
-function resolve(scene, t, opts = {}, tree = null) {
-  tree = tree || evaluate(scene, t, opts);
-  const items = [];
-  const vb = String(tree.attrs.viewBox || `0 0 ${scene.width} ${scene.height}`).split(/\s+/).map(Number);
-  const walk = (n, st) => {
-    if (n.tag === 'defs' || n.tag === 'clipPath' || n.tag === 'mask' || n.tag === 'pattern' || n.tag === 'filter') return;
-    const a = n.attrs || {};
-    let m = st.m, op = st.op, id = st.id, clip = st.clip, mask = st.mask, filter = st.filter, blend = st.blend;
-    if (a.transform) m = matMul(m, parseTransform(a.transform));
-    if (n.tag === 'svg' && n !== tree && a.viewBox) {
-      const [vx, vy, vw, vh] = String(a.viewBox).split(/\s+/).map(Number);
-      m = matMul(m, [(+a.width || vw) / vw, 0, 0, (+a.height || vh) / vh, (+a.x || 0) - vx * ((+a.width || vw) / vw), (+a.y || 0) - vy * ((+a.height || vh) / vh)]);
-    }
-    if (a.opacity != null) op *= +a.opacity;
-    if (a['data-node']) id = a['data-node'];
-    const cp = urlRef(a['clip-path']); if (cp) clip = [...clip, cp];
-    const mk = urlRef(a.mask); if (mk) mask = [...mask, mk];
-    const fl = urlRef(a.filter); if (fl) filter = [...filter, fl];
-    const bm = /mix-blend-mode:\s*([\w-]+)/.exec(a.style || ''); if (bm) blend = bm[1];
-    if (DRAWABLE.has(n.tag)) items.push({ id, tag: n.tag, attrs: a, text: n.text, matrix: m, opacity: op, clip, mask, filter, blend });
-    const s2 = { m, op, id, clip, mask, filter, blend };
-    for (const c of n.children || []) walk(c, s2);
-  };
-  for (const c of tree.children || []) walk(c, { m: IDENTITY, op: 1, id: null, clip: [], mask: [], filter: [], blend: null });
-  return { width: scene.width, height: scene.height, viewBox: vb, defs: defsOf(tree), items, tree };
-}
-
 /* ---- core/canvas.js ---- */
 /**
  * Canvas2D-бэкенд: рисует дерево отображения кадра на <canvas>. Path2D кэшируются по строке d, градиенты — по
@@ -3438,6 +3677,7 @@ function resolve(scene, t, opts = {}, tree = null) {
  * поддерево рисуется через SVG-картинку (откат); пока она грузится, показывается прошлый кадр этого поддерева.
  * Ограничение отката: картинки по внешним URL внутри такого поддерева не видны (SVG как изображение их не грузит).
  */
+
 
 
 
@@ -3453,7 +3693,7 @@ class CanvasRenderer {
   constructor(container, opts = {}) {
     this.el = container;
     this.opts = opts;
-    this.paths = new Map();
+    this.paths = new BoundedCache(8000);
     this.images = new Map();
     this.fallbacks = new Map();
     this.lastFallback = new Map();
@@ -3473,7 +3713,7 @@ class CanvasRenderer {
   /** Path2D по строке d (кэш). */
   path(d) {
     let p = this.paths.get(d);
-    if (!p) { if (this.paths.size > 8000) this.paths.clear(); p = new Path2D(d); this.paths.set(d, p); }
+    if (!p) { p = new Path2D(d); this.paths.set(d, p); }
     return p;
   }
   render(tree, player) {
@@ -4239,6 +4479,7 @@ function modifiersTableMd() {
 
 
 
+
 /* ---------- XML ---------- */
 const XML_ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 const xmlUnescape = (s) => s.replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (m, e) => (e[0] === '#' ? String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : +e.slice(1)) : XML_ENT[e] ?? m));
@@ -4348,7 +4589,6 @@ const siLen = (v, ref = 100, def = 0) => {
   if (s.endsWith('in')) return n * 96;
   return n;
 };
-const r4 = (v) => Math.round(v * 1e4) / 1e4;
 
 /** Цвет SVG → строка движка (hex или rgba), с прозрачностью alpha. null — нет краски. */
 function siColor(v, alpha, style) {
@@ -4391,16 +4631,7 @@ const SVG_NAMED = {
  * Разложить матрицу [a b c d e f] в трансформацию движка: translate · rotate · skewX · scale.
  * Точно для любой невырожденной матрицы (отражение — отрицательный scaleY).
  */
-function decomposeMatrix(m) {
-  const [a, b, c, d, e, f] = m;
-  const sx = Math.hypot(a, b);
-  if (sx < 1e-12) return { x: e, y: f, rotation: 0, scaleX: 0, scaleY: 0, skewX: 0 };
-  const th = Math.atan2(b, a), cs = Math.cos(th), sn = Math.sin(th);
-  const c2 = cs * c + sn * d, d2 = -sn * c + cs * d;
-  const sy = d2;
-  const skew = Math.abs(sy) > 1e-12 ? Math.atan(c2 / sy) : 0;
-  return { x: e, y: f, rotation: (th * 180) / Math.PI, scaleX: sx, scaleY: sy, skewX: (skew * 180) / Math.PI };
-}
+const decomposeMatrix = mat.decompose;
 function siTransformProps(m) {
   const t = decomposeMatrix(m), out = {};
   if (Math.abs(t.x) > 1e-6) out.x = r4(t.x);
@@ -4440,7 +4671,7 @@ function importSVG(src, opts = {}) {
   const vb = siNums(svg.attrs.viewBox);
   const W = siLen(svg.attrs.width, 100, vb.length === 4 ? vb[2] : 300), H = siLen(svg.attrs.height, 100, vb.length === 4 ? vb[3] : 150);
   const viewBox = vb.length === 4 && vb[2] > 0 && vb[3] > 0 ? vb : [0, 0, W, H];
-  const width = Math.round(viewBox[2] * 1000) / 1000, height = Math.round(viewBox[3] * 1000) / 1000;
+  const width = r3(viewBox[2]), height = r3(viewBox[3]);
 
   const nodes = [];
   const taken = new Set(opts.taken || []);
@@ -4744,6 +4975,7 @@ function insertSVG(scene, src, opts = {}) {
 
 
 
+
 const LT_DRAW = new Set(['g', 'path', 'rect']);
 /** Ключи элементов среди соседей — как у DOMRenderer: узел сцены, id, иначе тег; повторы по порядку. */
 function ltKeys(children) {
@@ -4758,8 +4990,8 @@ function ltKeys(children) {
 class LtTrack {
   constructor(tag, name) { this.tag = tag; this.name = name; this.kids = new Map(); this.order = []; this.s = []; }
 }
-const ltR = (v) => Math.round(v * 1000) / 1000;
-const ltR2 = (v) => Math.round(v * 100) / 100;
+const ltR = r3;
+const ltR2 = (v) => roundTo(v, 2);
 
 /** Краска кадра → { kind: 'solid', c: [r,g,b], a } | { kind: 'grad', type, pts, stops } | null. */
 function ltPaint(v, alpha, defs, warn) {
@@ -5091,4 +5323,4 @@ function exportLottie(scene, opts = {}) {
   return { lottie, warnings: [...warnings], frames };
 }
 
-export { clamp, lerp, noise3, noise1, fbm, hashStr, mat, easings, cubicBezier, springEase, resolveEase, parseColor, formatColor, mixColor, parsePath, geomToPath, smoothGeom, toGeom, translateGeom, prepareMorph, lerpGeom, morph, measureGeom, pointAtFraction, deformGeom, interpolate, sampleKeys, VERSION, propDefault, createScene, invalidate, invalidateNode, NODE_TYPES, NODE_DEFS, COMMON_PROPS, registerNodeType, typeProps, typeAnimated, MODIFIERS, registerModifier, modIsStatic, compileSafeExpr, compileExpr, setExprPolicy, exprPolicy, allowExprFunctions, RELIEF_DEFAULT, PASS_MODES, RENDER_MODES, modeInfo, registerRenderMode, vec3, surfaceAxes, resolveSurface, encodeNormal, encodePlaneD, encodeMatId, materialIndex, normalGradLayers, normalMapMatrix, CAMERA3D_DEFAULT, cameraModel, DITHER_PATTERNS, evaluate, symbolScene, instanceTime, nodeWorldMatrix, collectLights, quantizeRGBA, pixelOf, treeToString, renderSVG, DOMRenderer, Player, CanvasRenderer, filterTemplate, resolve, parseTransform, matMul, defsOf, urlRef, ops, clipRange, clipTime, uniqueId, subtreeOf, nodeRefs, markersCrossed, diffScenes, editsEmpty, editsCount, applyEdits, validateScene, validateStructure, repairScene, PRESETS, applyPreset, describeScene, SCENE_VERSION, sceneSchema, migrate, MIGRATIONS, typesTableMd, modifiersTableMd, importSVG, insertSVG, parseXML, decomposeMatrix, exportLottie };
+export { clamp, lerp, noise3, noise1, fbm, hashStr, mat, vec3, roundTo, r3, r4, TAU, DEG, makeRng, pmStep, easings, cubicBezier, springEase, resolveEase, parseColor, formatColor, mixColor, toLin, toGam, parsePath, geomToPath, smoothGeom, toGeom, translateGeom, prepareMorph, lerpGeom, morph, measureGeom, pointAtFraction, deformGeom, interpolate, sampleKeys, VERSION, propDefault, createScene, invalidate, invalidateNode, sceneMemo, NODE_TYPES, NODE_DEFS, COMMON_PROPS, registerNodeType, typeProps, typeAnimated, MODIFIERS, registerModifier, modIsStatic, compileSafeExpr, compileExpr, setExprPolicy, exprPolicy, allowExprFunctions, RELIEF_DEFAULT, PASS_MODES, RENDER_MODES, modeInfo, registerRenderMode, surfaceAxes, resolveSurface, encodeNormal, encodePlaneD, encodeMatId, materialIndex, normalGradLayers, normalMapMatrix, CAMERA3D_DEFAULT, cameraModel, DITHER_PATTERNS, evaluate, symbolScene, instanceTime, nodeWorldMatrix, collectLights, quantizeRGBA, pixelOf, treeToString, renderSVG, isSolid, dropUnderBg, DOMRenderer, Player, CanvasRenderer, filterTemplate, resolve, parseTransform, matMul, defsOf, urlRef, ops, clipRange, clipTime, uniqueId, subtreeOf, nodeRefs, markersCrossed, diffScenes, editsEmpty, editsCount, applyEdits, validateScene, validateStructure, repairScene, PRESETS, applyPreset, describeScene, SCENE_VERSION, sceneSchema, migrate, MIGRATIONS, typesTableMd, modifiersTableMd, importSVG, insertSVG, parseXML, decomposeMatrix, exportLottie };

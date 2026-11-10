@@ -3,6 +3,7 @@
 // те же, что на процессоре; счёт во float32. Картиночные фактуры (tex.src) сюда не попадают — для них этап идёт на
 // процессоре (gpuMaterialsOK).
 import { gpuExec, uniforms, groups2 } from './gpu.mjs';
+import { binds, C01, U01 } from './wgsl.mjs';
 
 const STRIDE = 64;
 const F = { tex: 1, noise: 2, grime: 4, wear: 8, bump: 16, tint: 32, mult: 64, noiseC: 128, wearC: 256, thin: 512, pal: 1024 };
@@ -57,10 +58,7 @@ function packMaterials(mats, mean, det) {
 const CURV = /* wgsl */ `
 struct U { W: u32, H: u32 }
 @group(0) @binding(0) var<uniform> p: U;
-@group(0) @binding(1) var<storage, read> Nx: array<f32>;
-@group(0) @binding(2) var<storage, read> Ny: array<f32>;
-@group(0) @binding(3) var<storage, read> Nz: array<f32>;
-@group(0) @binding(4) var<storage, read_write> curv: array<f32>;
+${binds([['Nx'], ['Ny'], ['Nz'], ['curv', 'f32', true]])}
 @compute @workgroup_size(16, 16) fn main(@builtin(global_invocation_id) g: vec3u) {
   if (g.x < 1u || g.y < 1u || g.x + 1u >= p.W || g.y + 1u >= p.H) { return; }
   let i = g.y * p.W + g.x; let W = p.W;
@@ -72,31 +70,18 @@ struct U { W: u32, H: u32 }
 const MATS = /* wgsl */ `
 struct U { W: u32, H: u32, nm: u32, filt: u32 }
 @group(0) @binding(0) var<uniform> p: U;
-@group(0) @binding(1) var<storage, read> mid: array<u32>;
-@group(0) @binding(2) var<storage, read_write> lin: array<f32>;
-@group(0) @binding(3) var<storage, read_write> Nx: array<f32>;
-@group(0) @binding(4) var<storage, read_write> Ny: array<f32>;
-@group(0) @binding(5) var<storage, read_write> Nz: array<f32>;
-@group(0) @binding(6) var<storage, read> PNx: array<f32>;
-@group(0) @binding(7) var<storage, read> PNy: array<f32>;
-@group(0) @binding(8) var<storage, read> PNz: array<f32>;
-@group(0) @binding(9) var<storage, read> Px: array<f32>;
-@group(0) @binding(10) var<storage, read> Py: array<f32>;
-@group(0) @binding(11) var<storage, read> Pz: array<f32>;
-@group(0) @binding(12) var<storage, read> ao: array<f32>;
-@group(0) @binding(13) var<storage, read> curv: array<f32>;
-@group(0) @binding(14) var<storage, read> M: array<f32>;
-@group(0) @binding(15) var<storage, read> C: array<f32>;
+${binds([['mid', 'u32'], ['lin', 'f32', true], ['Nx', 'f32', true], ['Ny', 'f32', true], ['Nz', 'f32', true], ['PNx'], ['PNy'], ['PNz'], ['Px'], ['Py'], ['Pz'], ['ao'], ['curv'], ['M'], ['C']])}
 
 fn midAt(i: u32) -> u32 { return (mid[i >> 1u] >> ((i & 1u) * 16u)) & 0xffffu; }
-fn c01(v: f32) -> f32 { return clamp(v, 0.0, 1.0); }
+${C01}
+${U01}
 fn smoothT(a: f32, b: f32, x: f32) -> f32 { let q = c01((x - a) / (b - a)); return q * q * (3.0 - 2.0 * q); }
 fn bc(v: i32) -> u32 { return bitcast<u32>(v); }
 // h2 из materials.mjs (деление — по старшим 24 битам)
 fn h2(a: i32, b: i32, s: i32) -> f32 {
   var h = bc(a) * 374761393u + bc(b) * 668265263u + bc(s) * 1442695041u;
   h = (h ^ (h >> 13u)) * 1274126177u;
-  return f32((h ^ (h >> 16u)) >> 8u) / 16777216.0;
+  return u01(h ^ (h >> 16u));
 }
 // hash3 и noise3 из engine/core/math.js
 fn hash3(x: i32, y: i32, z: i32, s: i32) -> u32 {
@@ -312,7 +297,7 @@ export function gpuMaterials(mats, { W, H, mid, lin, Nx, Ny, Nz, PNx, PNy, PNz, 
     { data: PNx }, { data: PNy }, { data: PNz }, { data: Px }, { data: Py }, { data: Pz }, { data: ao }, { bytes: needWear ? n * 4 : 16 }, { data: M }, { data: C }];
   const passes = [];
   if (needWear) passes.push({ key: 'mat-curv', code: CURV, entry: 'main', uni: uniforms([['u', W], ['u', H]]), bind: [2, 3, 4, 12], groups: gr });
-  passes.push({ entry: 'main', uni: uniforms([['u', W], ['u', H], ['u', mats.length], ['u', filter ? 1 : 0]]), bind: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], groups: gr });
+  passes.push({ entry: 'main', uni: uniforms([['u', W], ['u', H], ['u', mats.length], ['u', filter ? 1 : 0]]), groups: gr });
   gpuExec({ key: 'materials', code: MATS, bufs, passes });
   let touched = 0;
   for (let i = 0; i < n; i++) { const id = mid[i]; if (id && id <= mats.length) touched++; }

@@ -3,11 +3,13 @@
 // Видео: ffmpeg.
 import { bundleEngine } from './bundle.mjs';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync, statSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir, cpus } from 'node:os';
 import { join, resolve, isAbsolute, extname } from 'node:path';
-import { evaluate, treeToString, renderSVG, pixelOf, quantizeRGBA, collectLights, parseColor } from '../engine/kontur.js';
-import { decodePNG, encodePNG } from './normals.mjs';
+import { evaluate, treeToString, renderSVG, pixelOf, quantizeRGBA, collectLights } from '../engine/kontur.js';
+import { decodePNG, encodePNG, isPng, scaleDown } from './normals.mjs';
+import { fileStamp, toDataURI } from './files.mjs';
+import { ambientRGB } from './scene_util.mjs';
 // resvg рендерит в пуле потоков libuv: несколько кадров считаются параллельно
 if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = String(Math.min(8, Math.max(4, cpus().length - 2)));
 /** Сколько кадров растеризовать одновременно. */
@@ -24,7 +26,7 @@ export function resolveSrc(src, baseDir) {
 }
 /** Размер изображения по заголовку файла (PNG, JPEG, GIF, WebP, SVG). */
 export function imageSize(buf) {
-  if (buf[0] === 0x89 && buf.toString('ascii', 1, 4) === 'PNG') return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  if (isPng(buf)) return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
   if (buf.toString('ascii', 0, 3) === 'GIF') return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
   if (buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
     const f = buf.toString('ascii', 12, 16);
@@ -52,24 +54,29 @@ export function imageSize(buf) {
 }
 const inlineCache = new Map();
 export function fileToDataURI(p) {
-  const st = statSync(p), key = p + '|' + st.mtimeMs;
-  if (!inlineCache.has(key)) inlineCache.set(key, `data:${IMAGE_MIME[extname(p).toLowerCase()] || 'application/octet-stream'};base64,${readFileSync(p).toString('base64')}`);
+  const key = fileStamp(p);
+  if (!inlineCache.has(key)) inlineCache.set(key, toDataURI(readFileSync(p), IMAGE_MIME[extname(p).toLowerCase()]));
   return inlineCache.get(key);
+}
+/** Свойства растрового слоя со ссылками на картинки (у src бывают ещё и ключи анимации). */
+export const IMAGE_SRC_KEYS = ['src', 'normalSrc', 'heightSrc', 'emissiveSrc', 'specSrc'];
+/** Копия сцены, где fn применена к ссылкам на картинки растровых слоёв (свойства keys и ключи src). */
+export function mapImageSrcs(scene, fn, keys = IMAGE_SRC_KEYS) {
+  return { ...scene, nodes: scene.nodes.map((n) => {
+    if (n.type !== 'image') return n;
+    const c = { ...n, props: { ...n.props } };
+    for (const k of keys) if (typeof c.props[k] === 'string') c.props[k] = fn(c.props[k]);
+    if (n.keys?.src) c.keys = { ...n.keys, src: n.keys.src.map((k) => ({ ...k, v: fn(k.v) })) };
+    return c;
+  }) };
 }
 /** Копия сцены, где локальные изображения встроены как data: URI (для рендера, видео, автономного HTML). */
 export function inlineAssets(scene, baseDir) {
   if (!scene.nodes.some((n) => n.type === 'image')) return scene;
-  const out = { ...scene, nodes: scene.nodes.map((n) => {
-    if (n.type !== 'image') return n;
-    const fix = (src) => { const p = resolveSrc(src, baseDir); return p ? fileToDataURI(p) : src; };
-    const c = { ...n, props: { ...n.props } };
-    for (const k of ['src', 'normalSrc', 'heightSrc', 'emissiveSrc', 'specSrc']) if (typeof c.props[k] === 'string') c.props[k] = fix(c.props[k]);
-    if (n.keys?.src) c.keys = { ...n.keys, src: n.keys.src.map((k) => ({ ...k, v: fix(k.v) })) };
-    return c;
-  }) };
-  if (scene.dither) out.dither = scene.dither;
-  return out;
+  return mapImageSrcs(scene, (src) => { const p = resolveSrc(src, baseDir); return p ? fileToDataURI(p) : src; });
 }
+/** SVG с одной встроенной картинкой w×h (для растеризатора). */
+export const imageSVG = (buf, mime, w, h) => `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><image width="${w}" height="${h}" href="${toDataURI(buf, mime)}"/></svg>`;
 
 /* ---------------- растеризаторы ----------------
  * Порядок: @resvg/resvg-js → rsvg-convert → ImageMagick (только настоящий: проверяется по `-version`)
@@ -164,7 +171,6 @@ const BACKENDS = {
   },
 };
 const PROBE = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#f00"/></svg>';
-const isPng = (b) => b && b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;
 
 let probing = null;
 /** Найти работающий растеризатор (один раз). KONTUR_RASTER=resvg-js|rsvg-convert|imagemagick|browser — принудительно. */
@@ -203,11 +209,18 @@ export const canPng = () => !!capabilities.png;
 export function rasterHelp() {
   return 'Установите в папке kontur: npm i @resvg/resvg-js (работает на Windows/macOS/Linux без внешних программ), либо librsvg (rsvg-convert), либо ImageMagick 7 (magick).';
 }
+/** Найти растеризатор; нет — ошибка с причиной и подсказкой. purpose — для чего он нужен («для экспорта видео»). */
+export async function requireRaster(purpose) {
+  const name = await probeRaster();
+  if (!name) throw new Error(`${purpose ? `Растеризатор SVG нужен ${purpose}, но его нет` : 'Нет работающего растеризатора SVG'} (${capabilities.pngError}). ${rasterHelp()}`);
+  return name;
+}
+/** Почему PNG недоступен (после probeRaster): причина и подсказка, для ответов с SVG вместо картинки. */
+export const rasterNote = () => `PNG недоступен: ${capabilities.pngError}. ${rasterHelp()}`;
 
 /** SVG-строка → PNG Buffer. */
 export async function svgToPng(svg, width) {
-  const name = await probeRaster();
-  if (!name) throw new Error(`Нет работающего растеризатора SVG (${capabilities.pngError}). ${rasterHelp()}`);
+  const name = await requireRaster();
   return BACKENDS[name](svg, width);
 }
 
@@ -216,8 +229,7 @@ export async function svgToPng(svg, width) {
  * напрямую; остальные растеризаторы — через PNG).
  */
 export async function svgToRGBA(svg, width) {
-  const name = await probeRaster();
-  if (!name) throw new Error(`Нет работающего растеризатора SVG (${capabilities.pngError}). ${rasterHelp()}`);
+  const name = await requireRaster();
   if (name === 'resvg-js') { const r = await resvgRender(svg, width); return { width: r.width, height: r.height, data: demultiply(r.pixels) }; }
   return decodePNG(await BACKENDS[name](svg, width));
 }
@@ -227,7 +239,7 @@ export async function svgToRGBA(svg, width) {
  * PNG декодируется сам; остальное — через ffmpeg (если есть), иначе через растеризатор SVG (resvg читает PNG/JPEG/GIF).
  */
 export async function decodeImage(buf, maxW = 0) {
-  const shrink = (im) => (maxW && im.width > maxW ? scaleNearestDown(im, maxW) : im);
+  const shrink = (im) => (maxW && im.width > maxW ? scaleDown(im, maxW) : im);
   if (isPng(buf)) return shrink(decodePNG(buf));
   await probeRaster();
   if (capabilities.ffmpeg) {
@@ -238,19 +250,12 @@ export async function decodeImage(buf, maxW = 0) {
   const sz = imageSize(buf);
   if (!sz) throw new Error('неизвестный формат картинки');
   const mime = buf[0] === 0xff && buf[1] === 0xd8 ? 'image/jpeg' : buf.toString('ascii', 0, 3) === 'GIF' ? 'image/gif' : 'image/webp';
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${sz.width}" height="${sz.height}" viewBox="0 0 ${sz.width} ${sz.height}"><image width="${sz.width}" height="${sz.height}" href="data:${mime};base64,${buf.toString('base64')}"/></svg>`;
-  const im = await svgToRGBA(svg, maxW ? Math.min(maxW, sz.width) : sz.width);
+  const im = await svgToRGBA(imageSVG(buf, mime, sz.width, sz.height), maxW ? Math.min(maxW, sz.width) : sz.width);
   let alpha = 0;
   for (let i = 3; i < im.data.length; i += 4 * 97) alpha |= im.data[i];
   if (!alpha) throw new Error(`растеризатор ${capabilities.png} не читает ${mime}: поставьте ffmpeg или сохраните картинку в PNG`);
   return im;
 }
-function scaleNearestDown(img, maxW) {
-  const k = img.width / maxW, w = maxW, h = Math.max(1, Math.round(img.height / k)), data = new Uint8Array(w * h * 4);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) data.set(img.data.subarray(((Math.floor(y * k) * img.width) + Math.floor(x * k)) * 4, ((Math.floor(y * k) * img.width) + Math.floor(x * k)) * 4 + 4), (y * w + x) * 4);
-  return { width: w, height: h, data };
-}
-
 /** Обработать список параллельно (не больше limit одновременно), сохраняя порядок результатов. */
 export async function mapLimit(list, limit, fn) {
   const out = new Array(list.length);
@@ -280,19 +285,26 @@ export function upscaleNearest(img, w, h) {
  *       lit (true или { ambient, normals }) — освещение источниками light по карте нормалей;
  *       lit: 'deferred' (или { mode: 'deferred', lighting, style }) — отложенный свет 2.5D-сцены (mcp/lighting.mjs).
  */
+/** lit — отложенный свет: 'deferred' или { mode: 'deferred', … }. */
+export const isDeferred = (lit) => lit === 'deferred' || (typeof lit === 'object' && lit?.mode === 'deferred');
+/** Настройки света из lit: объект как есть, иначе {}. */
+export const litOf = (lit) => (lit && typeof lit === 'object' ? lit : {});
+/** Кадр с отложенным светом (mcp/lighting.mjs) шириной width: результат renderLit ({ png, image, … }). */
+export async function renderDeferred(scene, t, opts, width) {
+  const { renderLit } = await import('./lighting.mjs');
+  const L = litOf(opts.lit);
+  return renderLit(scene, t, { width, states: opts.states, lighting: L.lighting, style: L.style, baseDir: opts.baseDir });
+}
+
 export async function renderPNG(scene, t = 0, opts = {}) {
-  const deferred = opts.lit === 'deferred' || (typeof opts.lit === 'object' && opts.lit?.mode === 'deferred');
+  const deferred = isDeferred(opts.lit);
   // без света и пиксельного режима PNG отдаёт сам растеризатор — без перекодирования
   if (!deferred && !opts.lit && !(opts.pixel !== false && pixelOf(scene))) {
     const vb = opts.viewBox || [0, 0, scene.width, scene.height];
     const outW = Math.max(1, Math.round(opts.width ?? vb[2]));
     return svgToPng(renderSVG(scene, t, { viewBox: opts.viewBox, only: opts.only, background: opts.background, states: opts.states, width: outW, cache: opts.cache }), outW);
   }
-  if (deferred) {
-    const { renderLit } = await import('./lighting.mjs');
-    const L = typeof opts.lit === 'object' ? opts.lit : {};
-    return (await renderLit(scene, t, { width: Math.round(opts.width ?? scene.width), states: opts.states, lighting: L.lighting, style: L.style, baseDir: opts.baseDir })).png;
-  }
+  if (deferred) return (await renderDeferred(scene, t, opts, Math.round(opts.width ?? scene.width))).png;
   return encodePNG(await renderRGBA(scene, t, opts));
 }
 
@@ -303,21 +315,15 @@ export async function renderRGBA(scene, t = 0, opts = {}) {
   const px = opts.pixel === false ? null : pixelOf(scene);
   const lowW = px ? Math.max(1, Math.round(vb[2] / px.size)) : outW;
   const ro = { viewBox: opts.viewBox, only: opts.only, background: opts.background, states: opts.states, width: lowW, crisp: !!px && !px.aa, cache: opts.cache };
-  const deferred = opts.lit === 'deferred' || (typeof opts.lit === 'object' && opts.lit?.mode === 'deferred');
   let img;
-  if (deferred) {
-    // отложенный свет (2.5D: camera3d + surface): свой пиксельный стиль задаётся style, scene.pixel не применяется
-    const { renderLit } = await import('./lighting.mjs');
-    const L = typeof opts.lit === 'object' ? opts.lit : {};
-    return (await renderLit(scene, t, { width: outW, states: opts.states, lighting: L.lighting, style: L.style, baseDir: opts.baseDir })).image;
-  }
+  // отложенный свет (2.5D: camera3d + surface): свой пиксельный стиль задаётся style, scene.pixel не применяется
+  if (isDeferred(opts.lit)) return (await renderDeferred(scene, t, opts, outW)).image;
   if (opts.lit) {
     const { sceneNormalMap, lightImage } = await import('./normals.mjs');
-    const L = typeof opts.lit === 'object' ? opts.lit : {};
+    const L = litOf(opts.lit);
     const r = await sceneNormalMap(scene, { t, only: opts.only, viewBox: vb, width: lowW, settings: L.normals || {}, states: opts.states, crisp: ro.crisp });
     const lights = collectLights(scene, t, { states: opts.states }).map((l) => ({ ...l, x: (l.x - vb[0]) * (lowW / vb[2]), y: (l.y - vb[1]) * (lowW / vb[2]), z: l.z * (lowW / vb[2]), radius: l.radius * (lowW / vb[2]) }));
-    const amb = parseColor(L.ambient || scene.ambient || '#4a4f5c');
-    img = lightImage(r.color, r.normal, lights, { ambient: amb.slice(0, 3) });
+    img = lightImage(r.color, r.normal, lights, { ambient: ambientRGB(scene, L.ambient) });
   } else img = await svgToRGBA(renderSVG(scene, t, ro), lowW);
   if (!px) return img;
   if (px.palette) quantizeRGBA(img.data, px.palette);
@@ -351,7 +357,7 @@ export function contactSheetSVG(scene, times, { cols, cellWidth = 480, states } 
 export async function exportVideo(scene, path, { fps = scene.fps || 30, width = scene.width, start = 0, end = scene.duration, format, onProgress, lit, baseDir } = {}) {
   await probeRaster();
   if (!capabilities.ffmpeg) throw new Error('Для экспорта видео нужен ffmpeg в PATH');
-  if (!canPng()) throw new Error(`Для экспорта видео нужен растеризатор SVG. ${rasterHelp()}`);
+  await requireRaster('для экспорта видео');
   const n = Math.max(1, Math.round((end - start) * fps));
   const w = Math.round(width / 2) * 2;
   const frame = (i) => renderRGBA(scene, start + i / fps, { width: w, cache: true, lit, baseDir });

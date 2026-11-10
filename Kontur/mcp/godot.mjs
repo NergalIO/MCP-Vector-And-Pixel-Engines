@@ -5,9 +5,11 @@
 // движком Kontur в PNG со всеми эффектами; анимированные слои — покадрово в AnimatedSprite2D
 // (клипы сцены → анимации SpriteFrames); режимы наложения — шейдером по SCREEN_TEXTURE.
 import { writeFileSync } from 'node:fs';
-import { join, basename, relative, sep } from 'node:path';
+import { join, basename } from 'node:path';
 import { parseColor } from '../engine/kontur.js';
 import { bakeLayers, layersManifest, SANE } from './layers.mjs';
+import { posixRel } from './paths.mjs';
+import { ambientRGB } from './scene_util.mjs';
 
 /* ============================== совместимость ============================== */
 const hasProp = (n, k) => n.props?.[k] != null && n.props[k] !== false || !!n.keys?.[k]?.length;
@@ -77,7 +79,7 @@ export async function exportGodot(scene, dir, opts = {}) {
   const b = await bakeLayers(scene, dir, { ...opts, tag: 'godot', layersDir: 'layers' });
   const { W, px, scale, clips, fpsOf, nodes, lights, frameCount, t0 } = b;
   const Hh = b.H, normalsOpt = b.normals;
-  const resOf = (f) => `${resPath}/${relative(dir, f).split(sep).join('/')}`;
+  const resOf = (f) => `${resPath}/${posixRel(dir, f)}`;
   // 4. .tscn
   const ext = [], sub = [];
   const extId = (path, type) => { let e = ext.find((x) => x.path === path); if (!e) { e = { id: `${ext.length + 1}_k`, path, type }; ext.push(e); } return e.id; };
@@ -89,6 +91,9 @@ export async function exportGodot(scene, dir, opts = {}) {
     return `SubResource("${subId(`diffuse_texture = ExtResource("${d}")\nnormal_texture = ExtResource("${nn}")`, 'CanvasTexture')}")`;
   };
   const shaderId = nodes.some((n) => n.blend) ? extId(`${resPath}/kontur_blend.gdshader`, 'Shader') : null;
+  // материал режима наложения слоя (ShaderMaterial): строка свойства material или ''
+  const blendMat = (n) => (n.blend ? `\nmaterial = SubResource("${subId(`shader = ExtResource("${shaderId}")\nshader_parameter/mode = ${BLEND_MODES[n.blend] || 3}`, 'ShaderMaterial')}")` : '');
+  const gdColor = (c) => `Color(${c.slice(0, 3).map((v) => v.toFixed(4)).join(', ')}, 1)`;
   const scriptId = extId(`${resPath}/kontur_player.gd`, 'Script');
   const body = [];
   const stateAttrs = (n) => (n.state ? `${n.state.visible ? '' : '\nvisible = false'}\nmetadata/kontur_state = "${n.state.group}=${n.state.value}"` : '');
@@ -97,23 +102,17 @@ export async function exportGodot(scene, dir, opts = {}) {
   body.push(`[node name="${SANE(opts.title || 'KonturScene')}" type="Node2D"]${px ? '\ntexture_filter = 1' : ''}\nscript = ExtResource("${scriptId}")\nclip = &"${firstClip}"\nnext_clips = {${clips.filter((c) => c.next).map((c) => `${JSON.stringify(c.name)}: ${JSON.stringify(c.next)}`).join(', ')}}\n`);
   for (const n of nodes) {
     if (n.type === 'static') {
-      let mat = '';
-      if (n.blend) {
-        const m = subId(`shader = ExtResource("${shaderId}")\nshader_parameter/mode = ${BLEND_MODES[n.blend] || 3}`, 'ShaderMaterial');
-        mat = `\nmaterial = SubResource("${m}")`;
-      }
+      const mat = blendMat(n); // до texRef: номера ресурсов в прежнем порядке
       body.push(`[node name="${n.name}" type="Sprite2D" parent="."]${stateAttrs(n)}\ntexture = ${texRef(n.file, n.normal)}\ncentered = false\nposition = Vector2(${n.x}, ${n.y})${sc}${mat}\n`);
     } else {
       const anims = n.anims.map((a) => `{\n"frames": [${a.frames.map((f) => `{\n"duration": ${f.duration.toFixed(1)},\n"texture": ${texRef(f.file, f.normal)}\n}`).join(', ')}],\n"loop": ${a.loop ? 'true' : 'false'},\n"name": &"${a.name}",\n"speed": ${a.fps.toFixed(1)}\n}`).join(', ');
       const sf = subId(`animations = [${anims}]`, 'SpriteFrames');
-      let mat = '';
-      if (n.blend) mat = `\nmaterial = SubResource("${subId(`shader = ExtResource("${shaderId}")\nshader_parameter/mode = ${BLEND_MODES[n.blend] || 3}`, 'ShaderMaterial')}")`;
+      const mat = blendMat(n);
       body.push(`[node name="${n.name}" type="AnimatedSprite2D" parent="."]${stateAttrs(n)}\nsprite_frames = SubResource("${sf}")\nanimation = &"${firstClip}"\nautoplay = "${firstClip}"\ncentered = false\nposition = Vector2(${n.x}, ${n.y})${sc}${mat}\n`);
     }
   }
   if (lights.length) {
-    const amb = parseColor(scene.ambient || '#4a4f5c');
-    body.push(`[node name="Ambient" type="CanvasModulate" parent="."]\ncolor = Color(${amb.slice(0, 3).map((v) => v.toFixed(4)).join(', ')}, 1)\n`);
+    body.push(`[node name="Ambient" type="CanvasModulate" parent="."]\ncolor = ${gdColor(ambientRGB(scene))}\n`);
     const texOf = new Map();
     for (const l of lights) {
       const f = l.falloff ?? 1;
@@ -124,7 +123,7 @@ export async function exportGodot(scene, dir, opts = {}) {
         texOf.set(f, subId(`gradient = SubResource("${g}")\nwidth = 256\nheight = 256\nfill = 1\nfill_from = Vector2(0.5, 0.5)\nfill_to = Vector2(1, 0.5)`, 'GradientTexture2D'));
       }
       const c = parseColor(l.color) || [1, 1, 1];
-      body.push(`[node name="Light_${SANE(l.name || l.id)}" type="PointLight2D" parent="."]${stateAttrs(l)}\nposition = Vector2(${l.x.toFixed(2)}, ${l.y.toFixed(2)})\ncolor = Color(${c.slice(0, 3).map((v) => v.toFixed(4)).join(', ')}, 1)\nenergy = ${(+l.energy).toFixed(3)}\ntexture = SubResource("${texOf.get(f)}")\ntexture_scale = ${((2 * l.radius) / 256).toFixed(4)}\nheight = ${(+l.z).toFixed(1)}\n`);
+      body.push(`[node name="Light_${SANE(l.name || l.id)}" type="PointLight2D" parent="."]${stateAttrs(l)}\nposition = Vector2(${l.x.toFixed(2)}, ${l.y.toFixed(2)})\ncolor = ${gdColor(c)}\nenergy = ${(+l.energy).toFixed(3)}\ntexture = SubResource("${texOf.get(f)}")\ntexture_scale = ${((2 * l.radius) / 256).toFixed(4)}\nheight = ${(+l.z).toFixed(1)}\n`);
     }
   }
   const tscn = [`[gd_scene load_steps=${ext.length + sub.length + 1} format=3]\n`,

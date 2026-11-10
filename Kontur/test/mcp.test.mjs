@@ -1,46 +1,22 @@
 // Сквозной тест MCP-сервера: протокол, инструменты, превью.
 // node test/mcp.test.mjs [папка-для-картинок]
-import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { writeFileSync, mkdtempSync, existsSync, readFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startServer, check, checks } from './helpers/mcp-child.mjs';
 
 const outDir = process.argv[2] || mkdtempSync(join(tmpdir(), 'kontur-test-'));
 const dir = mkdtempSync(join(tmpdir(), 'kontur-scene-'));
 const TOKEN = 'test-token-' + process.pid;
 const H = { headers: { 'x-kontur-token': TOKEN } };
-const srv = spawn(process.execPath, [fileURLToPath(new URL('../mcp/server.mjs', import.meta.url))], {
-  env: { ...process.env, KONTUR_SCENE: join(dir, 'scene.json'), KONTUR_PORT: '7799', KONTUR_TOKEN: TOKEN }, stdio: ['pipe', 'pipe', 'pipe'],
-});
-let buf = '', id = 0;
-const pending = new Map();
-srv.stdout.on('data', (d) => {
-  buf += d;
-  let i;
-  while ((i = buf.indexOf('\n')) >= 0) {
-    const line = buf.slice(0, i); buf = buf.slice(i + 1);
-    const m = JSON.parse(line);
-    pending.get(m.id)?.(m); pending.delete(m.id);
-  }
-});
-let stderr = '';
-srv.stderr.on('data', (d) => (stderr += d));
-srv.on('exit', (c) => { if (c) { console.error('сервер упал:', c, stderr.slice(-2000)); process.exit(1); } });
-const rpc = (method, params) => new Promise((res) => { const i = ++id; pending.set(i, res); srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: i, method, params }) + '\n'); });
-const call = async (name, args = {}) => {
-  const r = await rpc('tools/call', { name, arguments: args });
-  if (r.error || r.result.isError) throw new Error(`${name}: ${JSON.stringify(r.error || r.result.content[0].text)}`);
-  return r.result;
-};
-let ok = 0;
-const check = (cond, msg) => { if (!cond) throw new Error('ПРОВАЛ: ' + msg); ok++; console.log('✓', msg); };
+const { srv, rpc, call, notify, stderr } = startServer({ env: { KONTUR_SCENE: join(dir, 'scene.json'), KONTUR_PORT: '7799', KONTUR_TOKEN: TOKEN } });
 
 try {
   const init = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
   check(init.result.serverInfo.name === 'kontur', 'initialize');
-  srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+  notify('notifications/initialized');
   const list = await rpc('tools/list', {});
   check(list.result.tools.length >= 20, `tools/list: ${list.result.tools.length} инструментов`);
 
@@ -274,9 +250,9 @@ try {
   check(bayTex.endsWith('paint-texture.jpg'), `пример с ассетами открыт (${bayTex})`);
   const fb = await call('render_frame', { t: 1, width: 480 });
   check(fb.content[0].type === 'image', 'рендер примера с ассетами');
-  console.log(`\nВсе проверки пройдены: ${ok}. Картинки: ${outDir}`);
+  console.log(`\nВсе проверки пройдены: ${checks()}. Картинки: ${outDir}`);
 } catch (e) {
-  console.error(e.message, '\n--- stderr ---\n', stderr);
+  console.error(e.message, '\n--- stderr ---\n', stderr());
   process.exitCode = 1;
 } finally {
   srv.stdin.end();

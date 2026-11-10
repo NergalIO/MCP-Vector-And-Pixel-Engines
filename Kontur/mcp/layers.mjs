@@ -6,9 +6,10 @@
 // варианты состояний — отдельным слоем на каждый вариант. Режимы наложения остаются у слоя (blend)
 // и переносятся движком-получателем (шейдер/материал).
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { join } from 'node:path';
 import { renderSVG, clipRange, pixelOf, quantizeRGBA, collectLights, typeAnimated, modIsStatic } from '../engine/kontur.js';
-import { svgToPng, svgToRGBA, mapLimit, PARALLEL } from './render.mjs';
+import { svgToPng, svgToRGBA, mapLimit, PARALLEL, isDeferred } from './render.mjs';
+import { posixRel } from './paths.mjs';
 import { decodePNG, encodePNG, sceneNormalMap } from './normals.mjs';
 
 /* ============================== анализ слоёв ============================== */
@@ -162,7 +163,7 @@ export async function bakeLayers(scene, dir, opts = {}) {
   const crisp = !!px && !px.aa;
   // запечённый отложенный свет: статичные слои берут цвет из итогового кадра стиля (альфа — своя)
   let litFrame = null;
-  if (opts.lit === 'deferred' && scene.camera3d) {
+  if (isDeferred(opts.lit) && scene.camera3d) {
     const { renderLit } = await import('./lighting.mjs');
     litFrame = (await renderLit(scene, clips[0].start, { width: Math.round(W * scale) })).image;
     log(`${tag}: отложенный свет запечён (${litFrame.width}×${litFrame.height})`);
@@ -269,7 +270,7 @@ export async function bakeLayers(scene, dir, opts = {}) {
 
 /** Описание слоёв, кадров и клипов (kontur_manifest.json) — для своих конвертеров и проверки. */
 export function layersManifest(scene, dir, b, extra = {}) {
-  const rel = (f) => (f ? relative(dir, f).split(sep).join('/') : null);
+  const rel = (f) => (f ? posixRel(dir, f) : null);
   const manifest = {
     generator: 'kontur', ...extra, size: [b.W, b.H], scale: b.scale,
     clips: b.clips.map((c) => ({ name: c.name, start: c.start, end: c.end, loop: c.loop, fps: b.fpsOf(c), next: c.next })),

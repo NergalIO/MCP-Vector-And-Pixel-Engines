@@ -2,10 +2,10 @@
 // Вывод детерминирован, поэтому сравнение точное. Рефакторинг ядра не должен менять ни одного хеша.
 //   node test/golden.mjs           — сравнить
 //   node test/golden.mjs --update  — перезаписать test/golden.json (только если изменение вывода намеренное)
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { sha, runGolden } from './helpers/golden.mjs';
 // --engine <файл> — проверить другой вход движка (например, собранный одним модулем)
 const ei = process.argv.indexOf('--engine');
 const engineUrl = ei > 0 ? pathToFileURL(resolvePath(process.argv[ei + 1])).href : '../engine/kontur.js';
@@ -13,7 +13,6 @@ const { renderSVG, evaluate, treeToString } = await import(engineUrl);
 
 const root = new URL('..', import.meta.url);
 const file = new URL('test/golden.json', root);
-const sha = (s) => createHash('sha256').update(s).digest('hex').slice(0, 20);
 const MODES = ['color', 'height', 'normal', 'plane', 'planeD', 'emissive', 'ink', 'cover', 'matId', 'mask:chr'];
 const CASES = [
   { f: 'examples/flow.json', modes: ['color', 'height'], times: 6 },
@@ -39,17 +38,13 @@ export function computeGolden({ only } = {}) {
 const isMain = import.meta.url === new URL(process.argv[1], 'file:///').href || process.argv[1]?.endsWith('golden.mjs');
 if (isMain) {
   const t0 = performance.now();
-  const cur = computeGolden();
-  if (process.argv.includes('--update') || !existsSync(file)) {
-    writeFileSync(file, JSON.stringify(cur, null, 1) + '\n');
-    console.log(`✓ эталоны записаны: ${Object.keys(cur).length} (${((performance.now() - t0) / 1000).toFixed(1)} с)`);
-  } else {
-    const ref = JSON.parse(readFileSync(file, 'utf8'));
-    const bad = Object.keys(ref).filter((k) => k in cur && ref[k] !== cur[k]);
-    const missing = Object.keys(ref).filter((k) => !(k in cur));
-    for (const k of bad) console.log('  ✗', k);
-    if (missing.length) console.log(`  (нет сцен для ${missing.length} эталонов — пропущены)`);
-    console.log(bad.length ? `✗ эталонов не совпало: ${bad.length}` : `✓ эталоны совпали: ${Object.keys(ref).length - missing.length} (${((performance.now() - t0) / 1000).toFixed(1)} с)`);
-    process.exit(bad.length ? 1 : 0);
-  }
+  runGolden(file, computeGolden(), {
+    t0, ignoreMissing: true, exitOk: true,
+    written: (n, sec) => console.log(`✓ эталоны записаны: ${n} (${sec} с)`),
+    report: ({ bad, missing, n, sec }) => {
+      for (const k of bad) console.log('  ✗', k);
+      if (missing.length) console.log(`  (нет сцен для ${missing.length} эталонов — пропущены)`);
+      console.log(bad.length ? `✗ эталонов не совпало: ${bad.length}` : `✓ эталоны совпали: ${n} (${sec} с)`);
+    },
+  });
 }

@@ -3,8 +3,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve, extname, basename, isAbsolute, dirname } from 'node:path';
 import { ops, applyPreset, PRESETS, MODIFIERS, NODE_TYPES, DITHER_PATTERNS, insertSVG } from '../../engine/kontur.js';
 import { imageSize, fileToDataURI, IMAGE_MIME } from '../render.mjs';
+import { dataURIToBuffer, toDataURI } from '../files.mjs';
 import { scene, mutate, baseDir, toRel } from '../store.mjs';
-import { ANY, NUM, STR, OBJ, KEY, text, summary } from './common.mjs';
+import { ANY, NUM, STR, OBJ, KEY, text, summary, nodeById } from './common.mjs';
 
 export const tools = [
   {
@@ -84,8 +85,7 @@ export const tools = [
       let src, buf = null, name;
       if (/^data:/i.test(a.path)) {
         src = a.path;
-        const m = /^data:[^;,]+(;base64)?,(.*)$/s.exec(a.path);
-        if (m) buf = m[1] ? Buffer.from(m[2], 'base64') : Buffer.from(decodeURIComponent(m[2]));
+        buf = dataURIToBuffer(a.path);
       } else if (/^https?:/i.test(a.path)) {
         const r = await fetch(a.path);
         if (!r.ok) throw new Error(`Не удалось скачать ${a.path}: HTTP ${r.status}`);
@@ -100,7 +100,7 @@ export const tools = [
         else if (a.copy === false) src = toRel(baseDir())(p);
       }
       if (!src && buf) {
-        if (a.embed) src = `data:${IMAGE_MIME[extname(name).toLowerCase()] || 'image/png'};base64,${buf.toString('base64')}`;
+        if (a.embed) src = toDataURI(buf, IMAGE_MIME[extname(name).toLowerCase()], 'image/png');
         else {
           const dir = resolve(baseDir(), 'assets');
           mkdirSync(dir, { recursive: true });
@@ -247,7 +247,7 @@ export const tools = [
         const res = insertSVG(scene, src, o);
         // относительные ссылки картинок — от папки SVG к папке сцены
         if (file) for (const id of res.ids) {
-          const n = scene.nodes.find((x) => x.id === id);
+          const n = nodeById(scene, id);
           const s = n?.type === 'image' && n.props.src;
           if (s && !/^(data:|https?:|\/)/.test(s) && !isAbsolute(s)) n.props.src = toRel(baseDir())(resolve(dirname(file), s));
         }

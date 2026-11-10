@@ -7,14 +7,14 @@
 // Кувахара, краска, пиксели, контур, бумага, виньетка, FXAA, резкость, хроматическая аберрация, зерно).
 // Всё новое выключено по умолчанию: старые сцены дают тот же кадр пиксель в пиксель (test/lit-matrix.mjs).
 // Исключение — фильтрация фактур (textureFilter, исправление муара): она меняет только дальние пиксели материалов.
-import { renderSVG } from '../engine/kontur.js';
+import { evaluate, treeToString, dropUnderBg, modeInfo, parseColor, sceneMemo } from '../engine/kontur.js';
 import { svgToPng, svgToRGBA, mapLimit, probeRaster, adoptRaster, capabilities } from './render.mjs';
 import { encodePNG, sideBySide, scaleDown, heightToNormalSrc } from './normals.mjs';
 import { buildBVH } from './bvh.mjs';
 import { prepareMaterials, applyMaterials } from './materials.mjs';
-import { clamp01, LIN8, stageTimer, stackV } from './lit/util.mjs';
+import { LIN8, stageTimer, stackV, byte01, grayToRGBA, rgbToRGBA } from './lit/util.mjs';
 import { resolveLighting, resolveStyle, effectsSummary } from './lit/params.mjs';
-import { buildGBuffer } from './lit/gbuffer.mjs';
+import { buildGBuffer, forgetHalf } from './lit/gbuffer.mjs';
 import { occluders, sunShadows, contactShadows } from './lit/shadows.mjs';
 import { ambientOcclusion } from './lit/ao.mjs';
 import { ambientFn, sunDirect, shadeSurface } from './lit/shade.mjs';
@@ -25,8 +25,8 @@ import { volumetricLight } from './lit/volumetric.mjs';
 import { bloom, depthOfField, autoExposure } from './lit/post.mjs';
 import { tonemapFrame, matchPalette, loadRefStats, applyGrade } from './lit/color.mjs';
 import { applyStyle } from './lit/style.mjs';
-import { f32, warm, task, POOL, THREADS } from './lit/pool.mjs';
-import { initGPU, gpuInfo } from './lit/gpu.mjs';
+import { warm, task, frameArena, POOL, THREADS } from './lit/pool.mjs';
+import { initGPU, gpuInfo, gpuResident, gpuReleaseResident } from './lit/gpu.mjs';
 
 export { LIGHT_PRESETS, STYLE_TYPES, TONEMAPS, resolveLighting, resolveStyle, effectsSummary } from './lit/params.mjs';
 export { gauss } from './lit/filters.mjs';
@@ -36,7 +36,7 @@ export { loadCube, agx, hueTonemap, loadRefStats, matchPalette } from './lit/col
 export { normalMapFromPass } from './normals.mjs';
 
 /** Модули с попиксельными ядрами пула (mcp/lit/pool.mjs): воркеры загружают их заранее. */
-const KERNEL_MODS = ['./lit/filters.mjs', './lit/shadows.mjs', './lit/ao.mjs', './lit/gi.mjs', './lit/shade.mjs', './lit/style.mjs', './materials.mjs'].map((m) => new URL(m, import.meta.url).href);
+const KERNEL_MODS = ['./lit/filters.mjs', './lit/shadows.mjs', './lit/ao.mjs', './lit/gi.mjs', './lit/shade.mjs', './lit/compose.mjs', './lit/gbuffer.mjs', './lit/style.mjs', './materials.mjs'].map((m) => new URL(m, import.meta.url).href);
 
 /* ============================== проходы ============================== */
 export const PASS_LIST = ['color', 'normal', 'plane', 'planeD', 'emissive', 'ink', 'cover'];
@@ -52,22 +52,70 @@ export async function renderPasses(scene, t = 0, { width = scene.width, states, 
   const out = {};
   // с пулом потоков каждый проход (сборка SVG и растеризация) идёт в своём воркере; без пула — не больше двух сразу (память)
   await probeRaster();
-  // сцена уходит в воркеры одной строкой JSON: копировать строку дешевле, чем клонировать граф объектов на каждый проход
-  const base = { sceneJSON: POOL ? JSON.stringify(scene) : null, scene: POOL ? null : scene, t, width, states, raw, raster: capabilities.png, candidates: capabilities.candidates };
-  await mapLimit(list, POOL ? THREADS : 2, async (mode) => {
-    const local = async () => (await passTask({ ...base, scene, mode })).result;
+  // сцена уходит в воркеры ссылкой на JSON в общей памяти (sharedScene): без копии строки на каждый проход
+  const base = { shared: POOL ? sharedScene(scene) : null, scene: POOL ? null : scene, t, width, states, raw, raster: capabilities.png, candidates: capabilities.candidates };
+  const run = (mode, solidOK) => {
+    const local = async () => (await passTask({ ...base, scene, mode, solidOK })).result;
     // воркер не смог (сцена не переносится в JSON, упал воркер) — проход в главном потоке
-    out[mode] = await task(import.meta.url, 'passTask', { ...base, mode }, local).catch(local);
-    if (!raw) out[mode] = Buffer.from(out[mode].buffer, out[mode].byteOffset, out[mode].byteLength);
-  });
+    return task(import.meta.url, 'passTask', { ...base, mode, solidOK }, local).catch(local);
+  };
+  await mapLimit(list, POOL ? THREADS : 2, async (mode) => { out[mode] = await run(mode, list.length > 1); });
+  // сплошные проходы (нет свечения, масок, контуров) не растеризовались: заливка фоном по размеру растеризованных
+  const solid = list.filter((m) => out[m].solid);
+  if (solid.length) {
+    const ref = list.find((m) => !out[m].solid);
+    const size = ref ? imageSize(out[ref], raw) : null;
+    for (const m of solid) out[m] = size ? solidImage(size, out[m].solid, raw) : await run(m, false);
+  }
+  if (!raw) for (const m of list) out[m] = Buffer.from(out[m].buffer, out[m].byteOffset, out[m].byteLength);
   return out;
 }
+/** Размер прохода: RGBA-картинки или PNG (заголовок IHDR). */
+const imageSize = (im, raw) => (raw ? { width: im.width, height: im.height } : { width: readU32(im, 16), height: readU32(im, 20) });
+const readU32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
+/** Картинка цвета css (непрозрачная): RGBA или PNG. */
+function solidImage({ width, height }, css, raw) {
+  const [r, g, b] = parseColor(css).map((v) => Math.round(v * 255));
+  const data = new Uint8Array(width * height * 4);
+  for (let i = 0; i < data.length; i += 4) { data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255; }
+  const im = { width, height, data };
+  return raw ? im : new Uint8Array(encodePNG(im));
+}
 
+/**
+ * Разобранная сцена воркера: та же строка JSON (следующий кадр той же сцены) — тот же объект, а с ним и кэши движка
+ * (статичные поддеревья, пути, поверхности) живут между кадрами. Сравнение строк дешевле повторного JSON.parse.
+ */
+let parsed = { id: null, scene: null };
+function sceneOf({ id, sab }) {
+  if (parsed.id !== id) parsed = { id, scene: JSON.parse(Buffer.from(sab).toString('utf8')) };
+  return parsed.scene;
+}
+let sharedSerial = 0;
+/**
+ * Сцена для воркеров: JSON один раз на версию сцены (sceneMemo — до invalidate) в общей памяти. Задачи проходов
+ * получают ссылку, а не копию строки (14 МБ × 9 проходов на кадр), воркер разбирает сцену только при новом id.
+ */
+const sharedScene = (scene) => sceneMemo(scene, 'shared', () => {
+  const json = JSON.stringify(scene), sab = new SharedArrayBuffer(Buffer.byteLength(json));
+  Buffer.from(sab).write(json, 'utf8');
+  return { id: `${process.pid}:${++sharedSerial}`, sab };
+});
 /** Один проход: SVG сцены в режиме mode → RGBA { width, height, data } (raw) или PNG-байты. Задача воркера пула. */
-export async function passTask({ scene, sceneJSON, t, width, states, raw, mode, raster, candidates }) {
+export async function passTask({ scene, shared, t, width, states, raw, mode, raster, candidates, solidOK = false }) {
   adoptRaster(raster, candidates);
-  if (!scene) scene = JSON.parse(sceneJSON);
-  const svg = renderSVG(scene, t, { width, states, mode: mode === 'color' ? undefined : mode });
+  if (!scene) scene = sceneOf(shared);
+  // cache: статичные поддеревья берутся из кэша кадра во всех режимах (сцена меняется только через invalidate)
+  let tree = evaluate(scene, t, { width, states, mode: mode === 'color' ? undefined : mode, cache: true });
+  // у проходов с фоном нарисованное цветом фона под всем остальным невидимо — не растеризуется; проход одного цвета
+  // не растеризуется вовсе: { solid } — renderPasses зальёт его по размеру остальных
+  const bg = mode === 'color' ? null : modeInfo(mode).bg;
+  if (bg) {
+    const r = dropUnderBg(tree, bg);
+    if (solidOK && r.solid) return { result: { solid: bg } };
+    tree = r.tree;
+  }
+  const svg = treeToString(tree);
   if (raw) {
     const im = await svgToRGBA(svg, width);
     return { result: im, transfer: im.data.byteOffset === 0 && im.data.byteLength === im.data.buffer.byteLength ? [im.data.buffer] : [] };
@@ -83,6 +131,18 @@ function gpuStats() {
   return g.adapter && !g.failure ? { gpu: g.adapter.device, gpuStages: g.wanted } : { gpu: false, gpuError: g.failure || 'нет адаптера' };
 }
 
+/**
+ * res.png — PNG картинки res.image, кодируется при первом обращении: тем, кому нужна только картинка (слои, видео
+ * в ffmpeg), сжатие не стоит ничего. level — уровень deflate (opts.pngLevel; для кадров видео хватает 1).
+ */
+function lazyPNG(res, level) {
+  return Object.defineProperty(res, 'png', { enumerable: true, configurable: true, get() {
+    const png = encodePNG(res.image, { level: level ?? 6 });
+    Object.defineProperty(res, 'png', { value: png, enumerable: true, writable: true });
+    return png;
+  } });
+}
+
 /* ============================== кадр ============================== */
 /**
  * Кадр с отложенным светом. Возвращает { png, image, debug? (PNG листа «цвет / нормали / тени+AO / итог»), shadowAO?, stats }.
@@ -90,9 +150,15 @@ function gpuStats() {
  * проходы: PNG или RGBA), baseDir (относительные пути текстур, LUT, карт высот, референса), bake: 'albedo'.
  */
 export async function renderLit(scene, t = 0, opts = {}) {
+  // резидентные буферы GPU и арена полей — на кадр (поля, ушедшие в результат, из арены не берутся)
+  const arena = frameArena();
+  try { return await litFrame(scene, t, opts, arena); } finally { gpuReleaseResident(); arena.release(); }
+}
+async function litFrame(scene, t, opts, arena) {
   const t0 = Date.now();
   if (!scene.camera3d) throw new Error('Отложенный свет требует scene.camera3d (camera3d_set): без камеры позиции пикселей не восстановить.');
-  scene = heightToNormalSrc(scene, opts.baseDir);
+  // карты высот → нормали: производная сцена одна на версию сцены (иначе каждый кадр — новый объект без кэшей)
+  scene = sceneMemo(scene, `h2n|${opts.baseDir || ''}`, (s) => heightToNormalSrc(s, opts.baseDir));
   const W0 = scene.width, H0 = scene.height;
   const W = Math.max(16, Math.round(opts.width ?? W0)), H = Math.max(9, Math.round((W * H0) / W0)), n = W * H;
   const st = resolveLighting(scene, opts.lighting);
@@ -107,13 +173,14 @@ export async function renderLit(scene, t = 0, opts = {}) {
   const { stages, lap } = stageTimer();
 
   // ---------- G-буфер ----------
-  const G = buildGBuffer(scene, pngs, { W, H, chrTag, withMatId: mats.length > 0 });
+  const G = buildGBuffer(scene, pngs, { W, H, chrTag, withMatId: mats.length > 0, arena });
   const { mask, alb, mid } = G;
+  gpuResident(G.Px, G.Py, G.Pz, G.PNx, G.PNy, G.PNz, G.Dp, mask); // до конца кадра не меняются
   lap('positions');
 
   // ---------- окклюдеры ----------
-  const occ = occluders(scene);
-  const bvh = occ.boxes.length + occ.tris.length > 0 ? buildBVH(occ) : null;
+  // окклюдеры — статичные свойства (не анимируются): BVH один на версию сцены, а не на кадр
+  const { occ, bvh } = sceneMemo(scene, 'bvh', (s) => { const occ = occluders(s); return { occ, bvh: occ.boxes.length + occ.tris.length > 0 ? buildBVH(occ) : null }; });
   lap('bvh');
 
   // ---------- тени солнца ----------
@@ -133,22 +200,25 @@ export async function renderLit(scene, t = 0, opts = {}) {
   lap('ao');
 
   // ---------- альбедо и попиксельные материалы ----------
-  const lin = f32(n * 3);
+  const lin = arena.f32(n * 3, false); // заполняется целиком ниже
   for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) lin[i * 3 + c] = LIN8[alb[i * 4 + c]];
   let matPixels = 0;
   // textureFilter: false — фактуры одной точкой на пиксель, как до фильтрации (вдали возможен муар)
   if (mid) matPixels = applyMaterials(mats, { W, H, mid, lin, Nx: G.Nx, Ny: G.Ny, Nz: G.Nz, PNx: G.PNx, PNy: G.PNy, PNz: G.PNz, Px: G.Px, Py: G.Py, Pz: G.Pz, ao, baseDir: opts.baseDir, filter: st.textureFilter !== false });
+  // материалы меняют нормали на месте; дальше они не меняются
+  forgetHalf(G, G.Nx, G.Ny, G.Nz);
+  gpuResident(G.Nx, G.Ny, G.Nz);
   lap('materials');
   if (opts.bake === 'albedo') {
     // альбедо с попиксельными материалами (для экспорта слоёв): цвет прохода color, где материала нет
     const data = new Uint8Array(n * 4);
     for (let i = 0; i < n; i++) {
       const o = i * 4;
-      for (let c = 0; c < 3; c++) data[o + c] = mid && mid[i] ? Math.round(clamp01(Math.pow(lin[i * 3 + c], 1 / 2.2)) * 255) : alb[o + c];
+      for (let c = 0; c < 3; c++) data[o + c] = mid && mid[i] ? byte01(Math.pow(lin[i * 3 + c], 1 / 2.2)) : alb[o + c];
       data[o + 3] = alb[o + 3];
     }
     const image = { width: W, height: H, data };
-    return { image, png: encodePNG(image), stats: { width: W, height: H, materials: mats.length, matPixels, ms: Date.now() - t0 } };
+    return lazyPNG({ image, stats: { width: W, height: H, materials: mats.length, matPixels, ms: Date.now() - t0 } }, opts.pngLevel);
   }
 
   // ---------- освещение поверхности ----------
@@ -184,27 +254,22 @@ export async function renderLit(scene, t = 0, opts = {}) {
   for (const s of style) out = applyStyle(s, out, sctx);
   lap('style');
 
-  const rgba = new Uint8Array(n * 4);
-  for (let i = 0; i < n; i++) { for (let c = 0; c < 3; c++) rgba[i * 4 + c] = Math.round(clamp01(out[i * 3 + c]) * 255); rgba[i * 4 + 3] = 255; }
-  const image = { width: W, height: H, data: rgba };
+  const image = { width: W, height: H, data: rgbToRGBA(out, n) };
   const P = st.paint, AE = st.aerial, sunAngle = Math.max(0, st.sun.angle || 0);
-  const res = { image, png: encodePNG(image), stats: { width: W, height: H, preset: st.preset, style: style.map((s) => s.type), lights: sh.lights.length, litLights: sh.litCount, boxes: occ.boxes.length, tris: occ.tris.length, rays,
+  const res = lazyPNG({ image, stats: { width: W, height: H, preset: st.preset, style: style.map((s) => s.type), lights: sh.lights.length, litLights: sh.litCount, boxes: occ.boxes.length, tris: occ.tris.length, rays,
     ...(sunAngle > 0 ? { sunAngle } : {}), ...(mats.length ? { materials: mats.length, matPixels } : {}), ...(st.gi ? { gi: true } : {}), ...(V ? { volumetric: true } : {}), ...(st.reflections ? { ssrPixels } : {}),
     ...(P ? { paint: true } : {}), ...(AE ? { aerial: true } : {}), ...(tmo ? { tonemap: tmo } : {}), ...(st.grade?.matchRef ? { matchRef: st.grade.matchRef.src } : {}),
     ...(st.ao?.mode === 'gtao' ? { ao: 'gtao' } : {}), ...(contact ? { contactShadows: true } : {}), ...(st.gi?.bounces > 1 ? { giBounces: st.gi.bounces } : {}),
     ...(dofInfo ? { dofFocus: +dofInfo.focus.toFixed(2) } : {}), ...(aeInfo ? { autoExposure: +aeInfo.k.toFixed(3) } : {}),
-    ...gpuStats(), effects: effectsSummary(st), passMs: tPass - t0, stageMs: stages, ms: Date.now() - t0 } };
+    ...gpuStats(), effects: effectsSummary(st), passMs: tPass - t0, stageMs: stages, ms: Date.now() - t0 } }, opts.pngLevel);
   if (opts.debug) {
-    const so = new Uint8Array(n * 4);
-    for (let i = 0; i < n; i++) { const v = Math.round(clamp01(shadow[i] * ao[i]) * 255); so[i * 4] = so[i * 4 + 1] = so[i * 4 + 2] = v; so[i * 4 + 3] = 255; }
+    const so = grayToRGBA(n, (i) => shadow[i] * ao[i]);
     const cell = Math.min(W, opts.debugWidth || 960);
     const im = (d) => scaleDown(d, cell);
     const top = sideBySide([im(G.imgOf('color')), im(G.imgOf('normal'))]), bot = sideBySide([im({ width: W, height: H, data: so }), im(image)]);
     res.shadowAO = { width: W, height: H, data: so };
     // отдельно AO (без тени солнца): видно, что даёт GTAO против SSAO
-    const ad = new Uint8Array(n * 4);
-    for (let i = 0; i < n; i++) { const v = Math.round(clamp01(ao[i]) * 255); ad[i * 4] = ad[i * 4 + 1] = ad[i * 4 + 2] = v; ad[i * 4 + 3] = 255; }
-    res.aoMap = { width: W, height: H, data: ad };
+    res.aoMap = { width: W, height: H, data: grayToRGBA(n, (i) => ao[i]) };
     res.debug = encodePNG(stackV([top, bot]));
   }
   return res;

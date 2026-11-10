@@ -1,10 +1,8 @@
 // Постобработка кадра на WebGPU: bloom (post.mjs), тонмаппинг, перенос палитры и цветокоррекция (color.mjs) —
 // те же формулы во float32. Вызываются через viaGPU с запасным путём на процессоре.
-import { gpuExec, uniforms, groups2 } from './gpu.mjs';
+import { gpuExec, uniforms, groups1, groups2 } from './gpu.mjs';
+import { binds, REFL, C01 } from './wgsl.mjs';
 
-const binds = (list) => list.map(([name, t = 'f32', rw], k) => `@group(0) @binding(${k + 1}) var<storage, ${rw ? 'read_write' : 'read'}> ${name}: array<${t}>;`).join('\n');
-/** Группы по 256 для одномерной сетки n (вторая ось — если групп больше 65535). */
-const groups1 = (n) => { const g = Math.ceil(n / 256); return g <= 65535 ? [g, 1, 1] : [65535, Math.ceil(g / 65535), 1]; };
 const IDX = 'let i = g.x + g.y * 65535u * 256u;\n  if (i >= p.n) { return; }';
 
 /* ---------------- bloom ---------------- */
@@ -15,7 +13,7 @@ struct U { w: u32, h: u32, r: i32, ko: u32, W: u32, H: u32, f: u32, sw: u32, sh:
 ${binds([['col', 'f32', true], ['em'], ['a'], ['o', 'f32', true], ['k']])}
 // у layout 'auto' в привязках — только то, что точка входа использует; проходы bloom привязывают всё — touch() «использует» всё
 fn touch() { if (p.w == 0xffffffffu) { o[0] = col[0] + em[0] + a[0] + k[0]; col[0] = 0.0; } }
-fn refl(i: i32, n: i32) -> i32 { var j = i; loop { if (j >= 0 && j < n) { break; } if (j < 0) { j = -j - 1; } else { j = 2 * n - j - 1; } } return j; }
+${REFL}
 // яркое выше порога + свечение → три плоскости o
 @compute @workgroup_size(16, 16) fn extract(@builtin(global_invocation_id) g: vec3u) {
   touch();
@@ -85,7 +83,7 @@ export function gpuBloom(col, emL, W, H, strength, threshold, kern) {
 
 /* ---------------- цвет: общие функции ---------------- */
 const COLOR = /* wgsl */ `
-fn c01(v: f32) -> f32 { return clamp(v, 0.0, 1.0); }
+${C01}
 fn acesC(x: f32) -> f32 { return c01((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)); }
 fn agx(c: vec3f) -> vec3f {
   let MIN = -12.47393; let MAX = 4.026069; let R = MAX - MIN;
@@ -142,7 +140,7 @@ ${binds([['col'], ['img', 'f32', true]])}
 export function gpuTonemap(col, img, n, { exposure, tonemap, saturation }) {
   const mode = tonemap === 'agx' ? 2 : tonemap === 'hue' ? 3 : tonemap === 'none' ? 1 : 0;
   gpuExec({ key: 'tonemap', code: TONEMAP, bufs: [{ data: col }, { data: img, io: 'out' }], passes: [
-    { entry: 'main', uni: uniforms([['u', n], ['u', mode], ['f', exposure], ['f', saturation]]), bind: [0, 1], groups: groups1(n) },
+    { entry: 'main', uni: uniforms([['u', n], ['u', mode], ['f', exposure], ['f', saturation]]), groups: groups1(n) },
   ] });
 }
 
@@ -171,7 +169,7 @@ export function gpuMatch(img, n, { src, ref, amt, wl, kL, kC, zones }) {
   const f = (v) => ['f', v];
   gpuExec({ key: 'match', code: MATCH, bufs: [{ data: img, io: 'inout' }], passes: [
     { entry: 'main', uni: uniforms([['u', n], ['u', zones ? 1 : 0], f(amt), f(wl), f(kL), f(kC), f(src.meanL), f(ref.meanL),
-      ...src.ma.map(f), ...src.mb.map(f), ...ref.ma.map(f), ...ref.mb.map(f), f(src.ga), f(src.gb), f(ref.ga), f(ref.gb)]), bind: [0], groups: groups1(n) },
+      ...src.ma.map(f), ...src.mb.map(f), ...ref.ma.map(f), ...ref.mb.map(f), f(src.ga), f(src.gb), f(ref.ga), f(ref.gb)]), groups: groups1(n) },
   ] });
 }
 
@@ -201,6 +199,6 @@ export function gpuGrade(img, n, g) {
   const sp = g.split, lum3 = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2], v4 = (c) => [...c.map((x) => ['f', x]), ['f', 0]];
   gpuExec({ key: 'grade', code: GRADE, bufs: [{ data: img, io: 'inout' }], passes: [
     { entry: 'main', uni: uniforms([['u', n], ['u', sp ? 1 : 0], ['f', g.contrast ?? 1], ['f', sp?.balance ?? 0], ['f', sp?.amount ?? 0], ['f', sp ? lum3(sp.shadows) : 0], ['f', sp ? lum3(sp.highlights) : 0], ['f', 0],
-      ...v4(g.lift), ...v4(g.gamma.map((x) => x || 1)), ...v4(g.gain), ...v4(sp ? sp.shadows : [0, 0, 0]), ...v4(sp ? sp.highlights : [0, 0, 0])]), bind: [0], groups: groups1(n) },
+      ...v4(g.lift), ...v4(g.gamma.map((x) => x || 1)), ...v4(g.gain), ...v4(sp ? sp.shadows : [0, 0, 0]), ...v4(sp ? sp.highlights : [0, 0, 0])]), groups: groups1(n) },
   ] });
 }

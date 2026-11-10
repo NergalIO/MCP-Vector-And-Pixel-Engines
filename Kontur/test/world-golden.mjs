@@ -3,12 +3,10 @@
 // намеренное изменение вида — только с --update.
 //   node test/world-golden.mjs           — сравнить
 //   node test/world-golden.mjs --update  — перезаписать test/world.golden.json
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import * as W3 from '../engine/world3d.js';
+import { sha, runGolden } from './helpers/golden.mjs';
 
 const file = new URL('world.golden.json', import.meta.url);
-const sha = (s) => createHash('sha256').update(s).digest('hex').slice(0, 20);
 
 /** Предметы на все типы v1 (поля — как в описаниях world_build). */
 export const ITEMS = {
@@ -98,14 +96,11 @@ export function computeWorldGolden() {
 }
 
 if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/').replace(/^\/?/, '/')}` || process.argv[1]?.endsWith('world-golden.mjs')) {
-  const cur = computeWorldGolden();
-  if (process.argv.includes('--update') || !existsSync(file)) {
-    writeFileSync(file, JSON.stringify(cur, null, 1) + '\n');
-    console.log(`✓ test/world.golden.json: ${Object.keys(cur).length} эталонов`);
-  } else {
-    const ref = JSON.parse(readFileSync(file, 'utf8'));
-    const bad = [...new Set([...Object.keys(ref), ...Object.keys(cur)])].filter((k) => ref[k] !== cur[k]);
-    if (bad.length) { console.error(`✗ сборка мира изменилась (${bad.length}):\n  ${bad.join('\n  ')}`); process.exit(1); }
-    console.log(`✓ сборка мира совпадает с эталонами: ${Object.keys(cur).length}`);
-  }
+  runGolden(file, computeWorldGolden(), {
+    written: (n) => console.log(`✓ test/world.golden.json: ${n} эталонов`),
+    report: ({ bad, n }) => {
+      if (bad.length) console.error(`✗ сборка мира изменилась (${bad.length}):\n  ${bad.join('\n  ')}`);
+      else console.log(`✓ сборка мира совпадает с эталонами: ${n}`);
+    },
+  });
 }

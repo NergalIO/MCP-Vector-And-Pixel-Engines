@@ -2,9 +2,11 @@
 // контактные тени (короткий луч по буферу глубины) и видимость ламп.
 import { gauss, bilateral, zoom2 } from './filters.mjs';
 import { nz, hash01, clamp01 } from './util.mjs';
-import { rows, f32, u8 } from './pool.mjs';
+import { vec3 } from '../../engine/kontur.js';
+import { f32 } from './pool.mjs';
+import { halves } from './gbuffer.mjs';
 import { bvhFromData } from '../bvh.mjs';
-import { viaGPU } from './gpu.mjs';
+import { viaRows } from './gpu.mjs';
 import { gpuSun } from './gpu-kernels.mjs';
 
 /** Окклюдеры сцены: props.occluder {box, boxes, tris, alpha} у видимых узлов. */
@@ -36,19 +38,15 @@ export function sunShadows(G, sun, bvh) {
   const sunAngle = Math.max(0, sun.angle || 0);
   const base = { W, hw, mask, PNx, PNy, PNz, Px, Py, Pz, L, shH, bvh: bvh?.data };
   if (!(sunAngle > 0)) {
-    if (sun.shadows !== false && bvh) rays = viaGPU('sun', hn, () => { gpuSun({ ...base, soft: false }); return litCount(base, hh); }, () => rows(import.meta.url, kSunHard, base, hh));
+    if (sun.shadows !== false && bvh) rays = viaRows('sun', hn, () => { gpuSun({ ...base, soft: false }); return litCount(base, hh); }, import.meta.url, kSunHard, base, hh);
     return { shadow: zoom2(gauss(shH, hw, hh, 0.9), hw, hh, W, H), rays };
   }
   const half = ((sunAngle * Math.PI) / 180) / 2, tanH = Math.tan(half);
-  const T1 = nz(Math.abs(L[1]) < 0.9 ? [L[2], 0, -L[0]] : [1, 0, 0]), T2 = [L[1] * T1[2] - L[2] * T1[1], L[2] * T1[0] - L[0] * T1[2], L[0] * T1[1] - L[1] * T1[0]];
-  const pen = f32(hn), hm = u8(hn), hD = f32(hn), hx = f32(hn), hy = f32(hn), hz = f32(hn);
-  for (let y = 0; y < hh; y++) for (let x = 0; x < hw; x++) {
-    const i = 2 * y * W + 2 * x, j = y * hw + x;
-    hm[j] = mask[i]; hD[j] = Dp[i]; hx[j] = PNx[i]; hy[j] = PNy[i]; hz[j] = PNz[i];
-  }
+  const T1 = nz(Math.abs(L[1]) < 0.9 ? [L[2], 0, -L[0]] : [1, 0, 0]), T2 = vec3.cross(L, T1);
+  const pen = f32(hn), [hm, hD, hx, hy, hz] = halves(G, 'mask', 'Dp', 'PNx', 'PNy', 'PNz');
   if (sun.shadows !== false && bvh) {
     const sargs = { ...base, Dp, T1, T2, tanH, f, pen };
-    rays = viaGPU('sun', hn, () => { gpuSun({ ...sargs, soft: true }); return litCount(base, hh); }, () => rows(import.meta.url, kSunSoft, sargs, hh));
+    rays = viaRows('sun', hn, () => { gpuSun({ ...sargs, soft: true }); return litCount(base, hh); }, import.meta.url, kSunSoft, sargs, hh);
   }
   // ширина полутени — и на освещённые соседние пиксели (нормированное размытие по затенённым)
   const occF = f32(hn);
@@ -111,11 +109,10 @@ export function contactShadows(G, dir, o) {
   const { W, H, hw, hh, hn, mask, Px, Py, Pz, PNx, PNy, PNz, Nx, Ny, Nz, Dp } = G;
   const proj = G.cam.proj, pr = [0, 0, 0];
   const len = o.length ?? 0.4, steps = Math.max(4, o.steps | 0 || 14), thick = o.thickness ?? 0.12, str = o.strength ?? 1;
-  const vis = f32(hn).fill(1), hm = u8(hn), hD = f32(hn), hx = f32(hn), hy = f32(hn), hz = f32(hn);
+  const vis = f32(hn).fill(1), [hm, hD, hx, hy, hz] = halves(G, 'mask', 'Dp', 'PNx', 'PNy', 'PNz');
   let marched = 0;
   for (let y = 0; y < hh; y++) for (let x = 0; x < hw; x++) {
     const i = 2 * y * W + 2 * x, j = y * hw + x;
-    hm[j] = mask[i]; hD[j] = Dp[i]; hx[j] = PNx[i]; hy[j] = PNy[i]; hz[j] = PNz[i];
     if (!mask[i]) continue;
     if (Nx[i] * dir[0] + Ny[i] * dir[1] + Nz[i] * dir[2] <= 0.02) continue; // к свету спиной — тень и так от N·L
     marched++;

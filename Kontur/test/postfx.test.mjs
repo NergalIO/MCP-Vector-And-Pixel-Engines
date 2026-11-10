@@ -6,8 +6,9 @@ import { resolveLighting, effectsSummary, renderLit, LIGHT_PRESETS } from '../mc
 import { depthOfField, autoExposure } from '../mcp/lit/post.mjs';
 import { multiBounce } from '../mcp/lit/ao.mjs';
 import { applyStyle } from '../mcp/lit/style.mjs';
-import { probeRaster } from '../mcp/render.mjs';
 import { buildWorld, toScene, normTess } from '../engine/world3d.js';
+import { needRaster } from './helpers/common.mjs';
+import { imageDiff } from './helpers/image.mjs';
 
 test('новые эффекты выключены по умолчанию; true и mode дают значения по умолчанию', () => {
   const st = resolveLighting({ lighting: { preset: 'day' } });
@@ -127,7 +128,7 @@ test('тесселяция: без неё мир прежний; вблизи с
 });
 
 test('рендер: GTAO, контактные тени, GI×2, глубина резкости, автоэкспозиция и новые стили дают кадр', async (t) => {
-  if (!(await probeRaster())) { t.skip('нет растеризатора'); return; }
+  if (!(await needRaster(t))) return;
   const { S } = buildWorld({ width: 320, height: 180, camera3d: { hor: 60, charPx: 60, f: 260, dz: 2 }, seed: 3, tess: true, items: [
     { type: 'ground', x: [-8, 8], z: [0, 40] },
     { type: 'box', x: [-1, 1], y: [0, 2], z: [6, 7], color: '#d88a9a' },
@@ -149,7 +150,6 @@ test('рендер: GTAO, контактные тени, GI×2, глубина �
   let dark = 0;
   for (let i = 0; i < r.aoMap.data.length; i += 4) if (r.aoMap.data[i] < 250) dark++;
   assert.ok(dark > 0, 'GTAO что-то затеняет');
-  let diff = 0;
-  for (let i = 0; i < r.image.data.length; i++) diff += Math.abs(r.image.data[i] - base.image.data[i]);
+  const diff = imageDiff(r.image.data, base.image.data).sum;
   assert.ok(diff > 0, 'кадр отличается от обычного');
 });

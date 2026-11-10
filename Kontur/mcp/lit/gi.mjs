@@ -3,21 +3,21 @@
 // отражённый свет (щели и внутренние углы светлеют, цветные рефлексы уходят дальше). Шум убирает билатеральный фильтр.
 import { bilateral, zoom2 } from './filters.mjs';
 import { hash01 } from './util.mjs';
-import { rows, f32, u8 } from './pool.mjs';
-import { viaGPU } from './gpu.mjs';
+import { f32 } from './pool.mjs';
+import { halves } from './gbuffer.mjs';
+import { viaRows } from './gpu.mjs';
 import { gpuGather } from './gpu-kernels.mjs';
 
 /** Добавить отражённый свет в light (на месте). ambient(i, c) — окружающая часть light (её не отражаем). */
 export function screenGI(G, gi, { light, lampL, lin, ao, ambient }) {
   const { W, H, n, hw, hh, hn, mask, Px, Py, Pz, Nx, Ny, Nz, Dp } = G;
   const rad = gi.radius ?? 2.5;
-  const hx = f32(hn), hy = f32(hn), hz = f32(hn), hnx = f32(hn), hny = f32(hn), hnz = f32(hn), hm = u8(hn), hD = f32(hn);
+  const [hm, hx, hy, hz, hnx, hny, hnz, hD] = halves(G, 'mask', 'Px', 'Py', 'Pz', 'Nx', 'Ny', 'Nz', 'Dp');
   const radc = [f32(hn), f32(hn), f32(hn)];
   const bounces = Math.max(1, Math.min(3, gi.bounces | 0 || 1));
   const halb = bounces > 1 ? [f32(hn), f32(hn), f32(hn)] : null;
   for (let y = 0; y < hh; y++) for (let x = 0; x < hw; x++) {
     const i = 2 * y * W + 2 * x, j = y * hw + x;
-    hm[j] = mask[i]; hx[j] = Px[i]; hy[j] = Py[i]; hz[j] = Pz[i]; hnx[j] = Nx[i]; hny[j] = Ny[i]; hnz[j] = Nz[i]; hD[j] = Dp[i];
     // излучение отправителя: прямой свет солнца и ламп × альбедо (небо отражённым светом не считаем)
     if (mask[i]) for (let c = 0; c < 3; c++) {
       radc[c][j] = lin[i * 3 + c] * (light[i * 3 + c] + (lampL !== light ? lampL[i * 3 + c] : 0) - ambient(i, c));
@@ -29,7 +29,7 @@ export function screenGI(G, gi, { light, lampL, lin, ao, ambient }) {
   const gather = (src, salt) => {
     const out = [f32(hn), f32(hn), f32(hn)];
     const args = { hw, hh, hm, hx, hy, hz, hnx, hny, hnz, src, out, radii, dirs, kk, salt, rad };
-    viaGPU('gi', hn, () => gpuGather(args), () => rows(import.meta.url, kGather, args, hh));
+    viaRows('gi', hn, () => gpuGather(args), import.meta.url, kGather, args, hh);
     return out;
   };
   const acc = gather(radc, 0);

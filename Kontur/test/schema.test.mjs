@@ -1,12 +1,12 @@
 // Реестры → схема и справка; миграции формата; новый тип узла через registerNodeType.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { runNode } from './helpers/common.mjs';
 import { sceneSchema, migrate, SCENE_VERSION, registerNodeType, NODE_TYPES, createScene, ops, renderSVG, validateScene, MODIFIERS, toGeom } from '../engine/kontur.js';
 
 test('справка и схема соответствуют реестрам (npm run docs)', () => {
-  execFileSync(process.execPath, [fileURLToPath(new URL('../scripts/gen-docs.mjs', import.meta.url)), '--check'], { stdio: 'pipe' });
+  runNode(fileURLToPath(new URL('../scripts/gen-docs.mjs', import.meta.url)), '--check');
 });
 
 test('схема: все типы узлов и модификаторов', () => {

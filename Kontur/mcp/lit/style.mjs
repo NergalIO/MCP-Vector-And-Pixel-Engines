@@ -6,12 +6,12 @@ import { noise3 } from '../../engine/kontur.js';
 import { upscaleNearest } from '../render.mjs';
 import { uniform, gauss, dilate3, splitRGB } from './filters.mjs';
 import { medianCut } from './color.mjs';
-import { clamp01, hash01 } from './util.mjs';
-import { rows, f32 } from './pool.mjs';
-import { viaGPU } from './gpu.mjs';
+import { clamp01, hash01, Y601, bilin, byte01 } from './util.mjs';
+import { f32 } from './pool.mjs';
+import { viaRows } from './gpu.mjs';
 import { gpuPaint } from './gpu-kernels.mjs';
 
-const luma = (img, i) => 0.299 * img[i * 3] + 0.587 * img[i * 3 + 1] + 0.114 * img[i * 3 + 2];
+const luma = (img, i) => Y601(img[i * 3], img[i * 3 + 1], img[i * 3 + 2]);
 
 /** Пост-эффект стиля s над img. ctx: { W, H, W0, mask, chm, inkL, alb, Dp }. Возвращает новый буфер (или тот же). */
 export function applyStyle(s, img, ctx) {
@@ -66,7 +66,7 @@ const STYLES = {
     for (const [rr, cnt] of [[0.35, 8], [0.68, 12], [1, 16]]) for (let j = 0; j < cnt; j++) { const a = ((j + 0.5) / cnt) * 6.2831853; pts.push([rr * Math.cos(a), rr * Math.sin(a), Math.floor((a / 6.2831853) * 8) & 7]); }
     const out = f32(n * 3);
     const args = { W, H, R, q, alpha, Es, Fs, Gs, img, out, pts };
-    viaGPU('paint', n, () => gpuPaint(args), () => rows(import.meta.url, kPaint, args, H));
+    viaRows('paint', n, () => gpuPaint(args), import.meta.url, kPaint, args, H);
     return out;
   },
 
@@ -160,7 +160,7 @@ const STYLES = {
     const q = new Uint8Array(lw * lh * 4);
     for (let y = 0; y < lh; y++) for (let x = 0; x < lw; x++) {
       const j = y * lw + x, th = (bay[y % 4][x % 4] / 16 - 0.47) * amp;
-      for (let c = 0; c < 3; c++) q[j * 4 + c] = Math.round(clamp01(small[j * 3 + c] / (cnt[j] || 1) + th) * 255);
+      for (let c = 0; c < 3; c++) q[j * 4 + c] = byte01(small[j * 3 + c] / (cnt[j] || 1) + th);
       q[j * 4 + 3] = 255;
     }
     const pal = medianCut(q, lw * lh, s.colors ?? 56);
@@ -188,7 +188,7 @@ const STYLES = {
     const STEPS = [1, 1, 1, 1, 1, 1.5, 2, 2, 2, 2, 4, 8];
     const sample = (fx, fy, c) => { // билинейная выборка канала c
       const x0 = Math.max(0, Math.min(W - 1, Math.floor(fx))), y0 = Math.max(0, Math.min(H - 1, Math.floor(fy))), x1 = Math.min(W - 1, x0 + 1), y1 = Math.min(H - 1, y0 + 1), tx = clamp01(fx - x0), ty = clamp01(fy - y0);
-      return (img[(y0 * W + x0) * 3 + c] * (1 - tx) + img[(y0 * W + x1) * 3 + c] * tx) * (1 - ty) + (img[(y1 * W + x0) * 3 + c] * (1 - tx) + img[(y1 * W + x1) * 3 + c] * tx) * ty;
+      return bilin(img[(y0 * W + x0) * 3 + c], img[(y0 * W + x1) * 3 + c], img[(y1 * W + x0) * 3 + c], img[(y1 * W + x1) * 3 + c], tx, ty);
     };
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const lC = at(x, y), lN = at(x, y - 1), lS = at(x, y + 1), lW = at(x - 1, y), lE = at(x + 1, y);
@@ -203,7 +203,7 @@ const STYLES = {
       // вдоль края до концов
       let ux = x + 0.5 + (horz ? 0 : stepLen * 0.5), uy = y + 0.5 + (horz ? stepLen * 0.5 : 0);
       const dx = horz ? 1 : 0, dy = horz ? 0 : 1;
-      const lumAt = (fx, fy) => { const xi = Math.floor(fx - 0.5), yi = Math.floor(fy - 0.5), tx = fx - 0.5 - xi, ty = fy - 0.5 - yi; return (at(xi, yi) * (1 - tx) + at(xi + 1, yi) * tx) * (1 - ty) + (at(xi, yi + 1) * (1 - tx) + at(xi + 1, yi + 1) * tx) * ty; };
+      const lumAt = (fx, fy) => { const xi = Math.floor(fx - 0.5), yi = Math.floor(fy - 0.5), tx = fx - 0.5 - xi, ty = fy - 0.5 - yi; return bilin(at(xi, yi), at(xi + 1, yi), at(xi, yi + 1), at(xi + 1, yi + 1), tx, ty); };
       let p1x = ux - dx, p1y = uy - dy, p2x = ux + dx, p2y = uy + dy;
       let e1 = lumAt(p1x, p1y) - lEdge, e2 = lumAt(p2x, p2y) - lEdge, d1 = Math.abs(e1) >= grad, d2 = Math.abs(e2) >= grad;
       for (let k = 1; k < STEPS.length && !(d1 && d2); k++) {
@@ -248,7 +248,7 @@ const STYLES = {
     const samp = (fx, fy, c) => {
       const x0 = Math.max(0, Math.min(W - 2, Math.floor(fx))), y0 = Math.max(0, Math.min(H - 2, Math.floor(fy))), tx = clamp01(fx - x0), ty = clamp01(fy - y0);
       const i00 = (y0 * W + x0) * 3 + c;
-      return (img[i00] * (1 - tx) + img[i00 + 3] * tx) * (1 - ty) + (img[i00 + W * 3] * (1 - tx) + img[i00 + W * 3 + 3] * tx) * ty;
+      return bilin(img[i00], img[i00 + 3], img[i00 + W * 3], img[i00 + W * 3 + 3], tx, ty);
     };
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x, dx = x - cx, dy = y - cy, r = Math.hypot(dx, dy) / rN, k = (amt * r) / rN; // сдвиг = amt·r² px

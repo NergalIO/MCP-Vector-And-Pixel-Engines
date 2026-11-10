@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { imageDiff } from './helpers/image.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const CHILD = `
@@ -60,13 +61,7 @@ test('KONTUR_GPU: кадр на видеокарте совпадает с пр�
   assert.ok(cpu.matPixels > 1000, 'материалы в кадре');
   assert.equal(gpu.matPixels, cpu.matPixels, 'материалов столько же');
   assert.equal(A.length, B.length);
-  let sum = 0, big = 0;
-  for (let i = 0; i < A.length; i += 4) {
-    let m = 0;
-    for (let c = 0; c < 3; c++) { const d = Math.abs(A[i + c] - B[i + c]); sum += d; if (d > m) m = d; }
-    if (m > 8) big++;
-  }
-  const px = A.length / 4, mean = sum / (px * 3);
+  const { bigPx: big, px, mean } = imageDiff(A, B, { channels: 3, big: 8 });
   assert.ok(mean < 0.05, `средняя разница ${mean.toFixed(4)} уровня`);
   assert.ok(big / px < 0.001, `пикселей с разницей > 8: ${big}`);
 });

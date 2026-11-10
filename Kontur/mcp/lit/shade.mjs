@@ -6,8 +6,22 @@ import { lampVisibility } from './shadows.mjs';
 import { multiBounce } from './ao.mjs';
 import { clamp01, rgb, lin22 } from './util.mjs';
 import { rows, f32 } from './pool.mjs';
-import { viaGPU } from './gpu.mjs';
+import { viaGPU, viaRows } from './gpu.mjs';
 import { gpuShadeSun, gpuLamps } from './gpu-kernels.mjs';
+
+/**
+ * Линейный цвет лампы с усилением kk: lin22(цвет) · energy · kk · 2.2, затем по очереди множители muls
+ * (ореол — плотность и сила; порядок умножений как был — результат бит в бит).
+ */
+export const lampColor = (lt, kk, ...muls) => rgb(lt.color).map((v) => { let x = lin22(v) * lt.energy * kk * 2.2; for (const m of muls) x *= m; return x; });
+/** Блинн — Фонг в пикселе i: (N·H)^p, H — середина направления на свет (lx, ly, lz) и на камеру. */
+function blinn(a, i, lx, ly, lz, p) {
+  let vx = a.camX - a.Px[i], vy = a.camY - a.Py[i], vz = a.camZ - a.Pz[i];
+  const vl = Math.hypot(vx, vy, vz) + 1e-6; vx /= vl; vy /= vl; vz /= vl;
+  const hx = lx + vx, hy = ly + vy, hz = lz + vz;
+  const hl = Math.hypot(hx, hy, hz) + 1e-6;
+  return Math.pow(clamp01((a.Nx[i] * hx + a.Ny[i] * hy + a.Nz[i] * hz) / hl), p);
+}
 
 /** Источники для отложенного света: узлы light с p3 (мировые координаты). */
 export function deferredLights(scene, t = 0, states) {
@@ -103,7 +117,7 @@ export function shadeSurface(G, st, { direct, ambient, bvh, scene, t, states, se
   const H = n / W;
   if (ambient.params) {
     const args = { W, Nx, Ny, Nz, Px, Py, Pz, spec, direct, light, specT, camX, camY, camZ, L, sunC, specI, amb: ambient.params };
-    viaGPU('shade', n, () => gpuShadeSun(args), () => rows(import.meta.url, kShadeSun, args, H));
+    viaRows('shade', n, () => gpuShadeSun(args), import.meta.url, kShadeSun, args, H);
   }
   else kShadeSun({ W, Nx, Ny, Nz, Px, Py, Pz, spec, direct, light, specT, camX, camY, camZ, L, sunC, specI, ambient }, 0, H);
   // точечные источники
@@ -113,7 +127,7 @@ export function shadeSurface(G, st, { direct, ambient, bvh, scene, t, states, se
   for (const lt of lights) {
     const kk = lampGain(st, lt);
     if (kk <= 0 || !(lt.radius > 0)) continue;
-    const lc = rgb(lt.color).map((v) => lin22(v) * lt.energy * kk * 2.2);
+    const lc = lampColor(lt, kk);
     const [lx, ly, lz] = lt.p3, r = lt.radius;
     const rect = lampRect(G, lx, ly, lz, r);
     if (!rect) continue;
@@ -132,14 +146,11 @@ export function shadeSurface(G, st, { direct, ambient, bvh, scene, t, states, se
 }
 
 /** Полоса строк y0…y1: окружающий свет, солнце и его блик (light, specT). */
-export function kShadeSun({ W, Nx, Ny, Nz, Px, Py, Pz, spec, direct, light, specT, camX, camY, camZ, L, sunC, specI, amb, ambient }, y0, y1) {
-  if (!ambient) ambient = ambientOf(amb);
+export function kShadeSun(a, y0, y1) {
+  const { W, spec, direct, light, specT, L, sunC, specI, amb } = a;
+  const ambient = a.ambient || ambientOf(amb);
   for (let i = y0 * W, iEnd = y1 * W; i < iEnd; i++) {
-    let vx = camX - Px[i], vy = camY - Py[i], vz = camZ - Pz[i];
-    const vl = Math.hypot(vx, vy, vz) + 1e-6; vx /= vl; vy /= vl; vz /= vl;
-    const hx = L[0] + vx, hy = L[1] + vy, hz = L[2] + vz;
-    const hl = Math.hypot(hx, hy, hz) + 1e-6;
-    const sp = Math.pow(clamp01((Nx[i] * hx + Ny[i] * hy + Nz[i] * hz) / hl), 40) * spec[i] * direct[i] * specI;
+    const sp = blinn(a, i, L[0], L[1], L[2], 40) * spec[i] * direct[i] * specI;
     for (let c = 0; c < 3; c++) {
       light[i * 3 + c] = ambient(i, c) + sunC[c] * direct[i];
       specT[i * 3 + c] = sp * sunC[c];
@@ -148,7 +159,8 @@ export function kShadeSun({ W, Nx, Ny, Nz, Px, Py, Pz, spec, direct, light, spec
 }
 
 /** Полоса строк рамки лампы (y0…y1 — от её верхней строки ya): свет и блик лампы в lampL, specT. */
-export function kShadeLamp({ W, ya, xa, xb, lx, ly, lz, r, lc, Nx, Ny, Nz, Px, Py, Pz, spec, camX, camY, camZ, specI, lampL, specT, vis, vw, vx0, vy0 }, y0, y1) {
+export function kShadeLamp(a, y0, y1) {
+  const { W, ya, xa, xb, lx, ly, lz, r, lc, Nx, Ny, Nz, Px, Py, Pz, spec, specI, lampL, specT, vis, vw, vx0, vy0 } = a;
   for (let y = ya + y0; y < ya + y1; y++) for (let x = xa; x <= xb; x++) {
     const i = y * W + x;
     const ddx = lx - Px[i], ddy = ly - Py[i], ddz = lz - Pz[i], dist = Math.hypot(ddx, ddy, ddz) + 1e-4;
@@ -157,11 +169,7 @@ export function kShadeLamp({ W, ya, xa, xb, lx, ly, lz, r, lc, Nx, Ny, Nz, Px, P
     const att = (1 - (dist / r) ** 2) ** 2;
     const nd = clamp01(Nx[i] * ldx + Ny[i] * ldy + Nz[i] * ldz);
     const vv = vis ? vis[(y - vy0) * vw + (x - vx0)] : 1;
-    let vx = camX - Px[i], vy = camY - Py[i], vz = camZ - Pz[i];
-    const vl = Math.hypot(vx, vy, vz) + 1e-6; vx /= vl; vy /= vl; vz /= vl;
-    const hx = ldx + vx, hy = ldy + vy, hz = ldz + vz;
-    const hl = Math.hypot(hx, hy, hz) + 1e-6;
-    const sp = Math.pow(clamp01((Nx[i] * hx + Ny[i] * hy + Nz[i] * hz) / hl), 30) * spec[i] * att * vv * specI;
+    const sp = blinn(a, i, ldx, ldy, ldz, 30) * spec[i] * att * vv * specI;
     for (let c = 0; c < 3; c++) { lampL[i * 3 + c] += nd * att * vv * lc[c]; specT[i * 3 + c] += sp * lc[c]; }
   }
 }

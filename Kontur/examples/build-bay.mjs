@@ -1,7 +1,7 @@
 // Сцена «Ремонтный отсек орбитальной станции» — фон для point-and-click игры.
 // node examples/build-bay.mjs  → examples/bay.json
 import { writeFileSync } from 'node:fs';
-import { createScene, ops, validateScene } from '../engine/kontur.js';
+import { createScene, ops, validateScene, makeRng } from '../engine/kontur.js';
 
 const W = 1920, H = 1080, DUR = 8;
 const s = createScene({ width: W, height: H, duration: DUR, fps: 60, background: '#3c4a5c' });
@@ -17,8 +17,7 @@ const C = {
   yellow: '#f2c14e', yellowSh: '#c99a30', rust: '#c8623a', rustSh: '#96472a', wood: '#a8703f',
   space: '#121a36',
 };
-let seed = 7;
-const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+const rnd = makeRng(7);
 const wob = (amount = 2.2, sd = 0) => ({ type: 'deform', amount, scale: 0.012, speed: 0, seed: sd, detail: 10 });
 const ink = (w = 5) => ({ stroke: C.line, strokeWidth: w, lineJoin: 'round' });
 let n = 0;

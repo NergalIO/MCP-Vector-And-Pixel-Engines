@@ -8,6 +8,7 @@
  * режимы наложения, дизеринг (узорная заливка).
  */
 import { parseColor } from './color.js';
+import { r3, roundTo } from './math.js';
 import { evaluate } from './evaluate.js';
 import { parsePath } from './geom.js';
 import { defsOf, parseTransform, urlRef } from './ir.js';
@@ -28,8 +29,8 @@ function ltKeys(children) {
 class LtTrack {
   constructor(tag, name) { this.tag = tag; this.name = name; this.kids = new Map(); this.order = []; this.s = []; }
 }
-const ltR = (v) => Math.round(v * 1000) / 1000;
-const ltR2 = (v) => Math.round(v * 100) / 100;
+const ltR = r3;
+const ltR2 = (v) => roundTo(v, 2);
 
 /** Краска кадра → { kind: 'solid', c: [r,g,b], a } | { kind: 'grad', type, pts, stops } | null. */
 function ltPaint(v, alpha, defs, warn) {

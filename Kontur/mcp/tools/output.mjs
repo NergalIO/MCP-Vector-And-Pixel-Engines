@@ -2,13 +2,14 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname, extname, basename } from 'node:path';
 import { ops, renderSVG, clipRange, pixelOf, exportLottie } from '../../engine/kontur.js';
-import { probeRaster, rasterHelp, svgToPng, canPng, contactSheetSVG, exportVideo, standaloneHTML, capabilities, resolveSrc, IMAGE_MIME, renderPNG } from '../render.mjs';
+import { probeRaster, requireRaster, rasterNote, svgToPng, canPng, contactSheetSVG, exportVideo, standaloneHTML, resolveSrc, IMAGE_MIME, renderPNG, isDeferred, litOf } from '../render.mjs';
+import { writeFileEnsured } from '../paths.mjs';
 import { sceneNormalMap, imageNormalMap, encodePNG, decodePNG, litPreview, sideBySide, scaleDown, NORMAL_DEFAULTS } from '../normals.mjs';
 import { compatReport, exportGodot } from '../godot.mjs';
 import { exportUnity } from '../unity.mjs';
 import { renderLit, renderPasses, normalMapFromPass } from '../lighting.mjs';
 import { log, scene, mutate, baseDir, S, toRel } from '../store.mjs';
-import { ANY, NUM, STR, OBJ, text } from './common.mjs';
+import { ANY, NUM, STR, OBJ, text, image, withImage, nodeById } from './common.mjs';
 
 export const tools = [
   {
@@ -17,15 +18,16 @@ export const tools = [
     inputSchema: { type: 'object', properties: { t: NUM, width: NUM, format: { type: 'string', enum: ['png', 'svg'] }, states: OBJ, lit: ANY, pixel: { type: 'boolean' }, debug: { type: 'boolean' }, out: STR }, required: ['t'] },
     run: async ({ t, width = 800, format = 'png', states, lit, pixel, debug, out }) => {
       await probeRaster();
-      if (format === 'svg' || !canPng()) return text((canPng() ? '' : `(PNG недоступен: ${capabilities.pngError}. ${rasterHelp()} Ниже SVG кадра.)\n`) + renderSVG(S(), t, { width, states }));
-      if (lit === 'deferred' || lit?.mode === 'deferred') {
-        const r = await renderLit(S(), t, { width, states, debug, lighting: lit?.lighting, style: lit?.style, baseDir: baseDir() });
-        if (out) { const p = resolve(out); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, r.png); }
+      if (format === 'svg' || !canPng()) return text((canPng() ? '' : `(${rasterNote()} Ниже SVG кадра.)\n`) + renderSVG(S(), t, { width, states }));
+      if (isDeferred(lit)) {
+        const L = litOf(lit);
+        const r = await renderLit(S(), t, { width, states, debug, lighting: L.lighting, style: L.style, baseDir: baseDir() });
+        if (out) writeFileEnsured(resolve(out), r.png);
         const st = r.stats;
-        return { content: [{ type: 'image', data: (debug ? r.debug : r.png).toString('base64'), mimeType: 'image/png' }, { type: 'text', text: `t = ${t}s, отложенный свет: пресет ${st.preset}, стиль [${st.style.join(', ')}], источников ${st.litLights}/${st.lights}, окклюдеров ${st.boxes} коробок + ${st.tris} треугольников, ${st.width}×${st.height}, ${(st.ms / 1000).toFixed(1)} с (проходы ${(st.passMs / 1000).toFixed(1)} с)${st.effects?.length ? `. Эффекты: ${st.effects.join(', ')}` : ''}${st.stageMs ? `. Этапы, мс: ${Object.entries(st.stageMs).map(([k, v]) => `${k} ${v}`).join(', ')}` : ''}${debug ? '. Лист: цвет | нормали / тени×AO | итог' : ''}${out ? `. Сохранено: ${resolve(out)}` : ''}` }] };
+        return withImage(debug ? r.debug : r.png, `t = ${t}s, отложенный свет: пресет ${st.preset}, стиль [${st.style.join(', ')}], источников ${st.litLights}/${st.lights}, окклюдеров ${st.boxes} коробок + ${st.tris} треугольников, ${st.width}×${st.height}, ${(st.ms / 1000).toFixed(1)} с (проходы ${(st.passMs / 1000).toFixed(1)} с)${st.effects?.length ? `. Эффекты: ${st.effects.join(', ')}` : ''}${st.stageMs ? `. Этапы, мс: ${Object.entries(st.stageMs).map(([k, v]) => `${k} ${v}`).join(', ')}` : ''}${debug ? '. Лист: цвет | нормали / тени×AO | итог' : ''}${out ? `. Сохранено: ${resolve(out)}` : ''}`);
       }
       const png = await renderPNG(S(), t, { width, states, lit, pixel, baseDir: baseDir() });
-      return { content: [{ type: 'image', data: png.toString('base64'), mimeType: 'image/png' }, { type: 'text', text: `t = ${t}s${states ? ' ' + JSON.stringify(states) : ''}${lit ? ', со светом' : ''}${pixelOf(scene) && pixel !== false ? ', пиксельный режим' : ''}` }] };
+      return withImage(png, `t = ${t}s${states ? ' ' + JSON.stringify(states) : ''}${lit ? ', со светом' : ''}${pixelOf(scene) && pixel !== false ? ', пиксельный режим' : ''}`);
     },
   },
   {
@@ -37,9 +39,9 @@ export const tools = [
       if (!times) times = Array.from({ length: count }, (_, i) => start + ((end - start) * i) / (count > 1 && end < scene.duration && !clip ? count - 1 : count));
       const svg = contactSheetSVG(S(), times.slice(0, 24), { cols, cellWidth, states });
       await probeRaster();
-      if (!canPng()) return text(`(PNG недоступен: ${capabilities.pngError}. ${rasterHelp()})\n` + svg);
+      if (!canPng()) return text(`(${rasterNote()})\n` + svg);
       const png = await svgToPng(svg);
-      return { content: [{ type: 'image', data: png.toString('base64'), mimeType: 'image/png' }, { type: 'text', text: `Кадры: ${times.map((t) => t.toFixed(2)).join(', ')}` }] };
+      return withImage(png, `Кадры: ${times.map((t) => t.toFixed(2)).join(', ')}`);
     },
   },
   {
@@ -47,8 +49,7 @@ export const tools = [
     description: 'Выгрузить проходы отложенного света в PNG (папка dir, по умолчанию <папка сцены>/passes): color (альбедо), normal (мировые нормали), plane (нормаль плоскости; альфа — геометрия), planeD (d плоскости 16 бит в R,G, блик в B), emissive, ink (маска контуров), cover (покрытие не-небом), mask_<метка> (masks, по умолчанию chr); normal_map — нормали в соглашении 2D-движков (Y вверх, Z к зрителю; yUp: false — Y вниз) для URP 2D / CanvasTexture; с lit: true — ещё shadow_ao и lit (итог). Возвращает превью.',
     inputSchema: { type: 'object', properties: { t: NUM, width: NUM, dir: STR, masks: { type: 'array', items: STR }, lit: { type: 'boolean' }, yUp: { type: 'boolean' } } },
     run: async ({ t = 0, width, dir, masks = ['chr'], lit, yUp = true }) => {
-      await probeRaster();
-      if (!canPng()) throw new Error(`Нужен растеризатор SVG: ${capabilities.pngError}. ${rasterHelp()}`);
+      await requireRaster('для проходов');
       const sc = S(), w = Math.round(width || sc.width);
       const out = resolve(dir || resolve(baseDir(), 'passes'));
       mkdirSync(out, { recursive: true });
@@ -64,7 +65,7 @@ export const tools = [
         put('lit', r.png); put('shadow_ao', encodePNG(r.shadowAO)); litImg = r.image;
       }
       const tiles = [decodePNG(p.color), decodePNG(p.normal), litImg || decodePNG(p.emissive)].map((im) => scaleDown(im, 480));
-      return { content: [{ type: 'image', data: encodePNG(sideBySide(tiles)).toString('base64'), mimeType: 'image/png' }, { type: 'text', text: `Проходы ${w}px (превью: color | normal | ${litImg ? 'lit' : 'emissive'}):\n${files.join('\n')}` }] };
+      return withImage(encodePNG(sideBySide(tiles)), `Проходы ${w}px (превью: color | normal | ${litImg ? 'lit' : 'emissive'}):\n${files.join('\n')}`);
     },
   },
   {
@@ -80,8 +81,7 @@ attach: true — записать путь в props.normalMap и props.normalSrc
       light: { type: 'object', properties: { x: NUM, y: NUM, z: NUM, ambient: NUM, intensity: NUM } }, attach: { type: 'boolean' },
     } },
     run: async (a) => {
-      await probeRaster();
-      if (!canPng()) throw new Error(`Для генерации нормалей нужен растеризатор SVG: ${capabilities.pngError}. ${rasterHelp()}`);
+      await requireRaster('для генерации нормалей');
       const target = a.target || (a.ids ? 'nodes' : a.file || a.id ? 'image' : 'scene');
       const settings = a.settings || {};
       let r, name;
@@ -89,7 +89,7 @@ attach: true — записать путь в props.normalMap и props.normalSrc
         let p;
         if (a.file) p = resolve(a.file);
         else {
-          const n = scene.nodes.find((x) => x.id === a.id);
+          const n = nodeById(scene, a.id);
           if (!n || n.type !== 'image') throw new Error(`Растровый слой ${a.id} не найден`);
           p = resolveSrc(n.props.src, baseDir());
           if (!p) throw new Error('У слоя нет локального файла (src — URL или data:). Сохраните картинку в файл и укажите file.');
@@ -102,8 +102,7 @@ attach: true — записать путь в props.normalMap и props.normalSrc
         name = target === 'nodes' ? a.ids.join('+') : 'scene';
       }
       const out = resolve(a.out || resolve(baseDir(), 'normals', `${name}_n.png`));
-      mkdirSync(dirname(out), { recursive: true });
-      writeFileSync(out, encodePNG(r.normal));
+      writeFileEnsured(out, encodePNG(r.normal));
       let extra = '';
       if (a.saveHeight) { const hp = out.replace(/(_n)?\.png$/i, '_h.png'); writeFileSync(hp, encodePNG(r.height)); extra += `\nКарта высот: ${hp}`; }
       if (a.attach && a.id) {
@@ -115,7 +114,7 @@ attach: true — записать путь в props.normalMap и props.normalSrc
       if (a.preview !== false) {
         const lit = litPreview(r.color, r.normal, { ...(a.light || {}), yUp: r.settings.yUp !== false });
         const pv = sideBySide([scaleDown(r.normal, 640), scaleDown(lit, 640)]);
-        content.unshift({ type: 'image', data: encodePNG(pv).toString('base64'), mimeType: 'image/png' });
+        content.unshift(image(encodePNG(pv)));
         content.push({ type: 'text', text: 'Слева — карта нормалей, справа — превью освещения точечным светом (light.x/y — доли кадра, z — высота).' });
       }
       return { content };
@@ -144,16 +143,14 @@ attach: true — записать путь в props.normalMap и props.normalSrc
       const p = resolve(path);
       mkdirSync(dirname(p), { recursive: true });
       if (engineExport) {
-        await probeRaster();
-        if (!canPng()) throw new Error(`Для экспорта в ${format === 'unity' ? 'Unity' : 'Godot'} нужен растеризатор SVG: ${capabilities.pngError}. ${rasterHelp()}`);
+        await requireRaster(`для экспорта в ${format === 'unity' ? 'Unity' : 'Godot'}`);
         const r = format === 'unity'
           ? await exportUnity(S(), p, { fps, scale, normals, clips, title, ppu, origin, pipeline, log, lit, lights })
           : await exportGodot(S(), p, { fps, scale, normals, clips, title, log, lit, lights });
         return text(r.summary);
       }
       if (format === 'png') {
-        await probeRaster();
-        if (!canPng()) throw new Error(`PNG недоступен: ${capabilities.pngError}. ${rasterHelp()}`);
+        await requireRaster('для PNG');
         writeFileSync(p, await renderPNG(S(), t, { width: width || scene.width, lit, baseDir: baseDir() }));
         return text(`Кадр${lit ? ' с отложенным светом' : ''}: ${p}`);
       }

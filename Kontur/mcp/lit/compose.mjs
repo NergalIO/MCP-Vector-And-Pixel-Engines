@@ -1,16 +1,19 @@
 // Сборка HDR-кадра: альбедо × свет (живописный режим, персонажи-спрайты, «плоские» узлы), блики, свечение, туман,
 // воздушная перспектива и небо (градиент с облаками, звёздами и луной из прохода color).
+// Попиксельная сборка считается полосами строк на всех ядрах (pool.mjs).
 import { clamp01, smoothstep, Y3, lin22, LIN8 } from './util.mjs';
 import { lightColors } from './shade.mjs';
+import { rows, f32 } from './pool.mjs';
+import { makeRng } from '../../engine/kontur.js';
 
 /** Цвет кадра col (линейный HDR, n·3) и свечение emL (n·3). */
 export function composeSurface(G, st, { light, lampL, specT, lin }) {
-  const { n, mask, cover, chm, em, Pz } = G, L = st.sun.dir;
+  const { W, H, n, mask, cover, chm, em, Pz } = G, L = st.sun.dir;
   const { sunC, skyC, gC } = lightColors(st);
   const P = st.paint;
   // персонажи: спрайты уже нарисованы со светотенью — свет нормируется и смешивается с единицей
   const ca = st.characters.amount ?? 0.45, ref = [0, 1, 2].map((c) => skyC[c] * 0.8 + sunC[c] * 0.75);
-  const col = new Float32Array(n * 3), emL = new Float32Array(n * 3);
+  const col = G.arena.f32(n * 3, false), emL = G.arena.f32(n * 3, false); // ядро пишет каждый пиксель
   const emI = st.emissive ?? 0.25;
   const fogK = st.fog?.density ?? 0, fogS = st.fog?.start ?? 6, fogAmt = st.fog?.amount ?? 0.6, fogC = (st.fog?.color || [0, 0, 0]).map(lin22);
   // «плоские» пиксели: покрыты узлами без поверхности поверх неба — фон + солнце для нормали к камере, без теней
@@ -19,19 +22,33 @@ export function composeSurface(G, st, { light, lampL, specT, lin }) {
   // живописный режим: опорная яркость «полного света», тон тени, нормированный по яркости (сдвиг тона, не затемнение)
   const refL = Math.max(1e-4, Y3(skyC[0] + sunC[0], skyC[1] + sunC[1], skyC[2] + sunC[2]));
   const pTint = P ? (() => { const y = Math.max(1e-4, Y3(...P.shadow)); return P.shadow.map((v) => v / y); })() : null;
-  const pR0 = P ? P.range[0] : 0, pR1 = P ? P.range[1] : 1;
+  const paint = P ? { chroma: P.chroma, amount: P.amount, fill: P.fill, desat: P.desat, r0: P.range[0], r1: P.range[1], tint: pTint } : null;
+  rows(import.meta.url, kCompose, { W, mask, cover, chm, em, Pz, light, lampL: sepLamps ? lampL : null, specT, lin, col, emL, paint, refL, ca, ref, sunC, skyC, gC, flatSun, emI, fogK, fogS, fogAmt, fogC }, H);
+  // воздушная перспектива: с глубиной цвет теряет насыщенность, сдвигается к aerial.color и чуть светлеет (дымка)
+  const AE = st.aerial;
+  if (AE) {
+    const ay = Math.max(1e-4, Y3(...AE.color)), aT = AE.color.map((v) => v / ay), aL = AE.color.map(lin22);
+    rows(import.meta.url, kAerial, { W, mask, Pz, col, start: AE.start, density: AE.density, amount: AE.amount, desat: AE.desat, shift: AE.shift, lift: AE.lift, aT, aL }, H);
+  }
+  return { col, emL };
+}
+
+/** Полоса строк y0…y1 сборки: свет (живописный режим, персонажи, плоские узлы) × альбедо + блик + свечение, туман. */
+export function kCompose(a, y0, y1) {
+  const { W, mask, cover, chm, em, Pz, light, specT, lin, col, emL, paint: P, refL, ca, ref, sunC, skyC, gC, flatSun, emI, fogK, fogS, fogAmt, fogC } = a;
+  const lampL = a.lampL || light, sepLamps = !!a.lampL;
   const li3 = [0, 0, 0], al3 = [0, 0, 0];
-  for (let i = 0; i < n; i++) {
+  for (let i = y0 * W, iEnd = y1 * W; i < iEnd; i++) {
     const ch = chm[i];
     if (P && mask[i]) {
       const j = i * 3, b0 = light[j], b1 = light[j + 1], b2 = light[j + 2], l = Y3(b0, b1, b2);
       // 1) цвет солнца и неба окрашивает поверхность лишь на долю chroma — локальный цвет сохраняется
       // 2) тень: доля s от «полного света» сдвигает тон к paint.shadow и подсвечивается заливкой fill
-      const s = 1 - smoothstep(pR0, pR1, l / refL), ls = Y3(lampL[j], lampL[j + 1], lampL[j + 2]) / refL;
-      const pS = s * (1 - smoothstep(0, pR1, ls));
+      const s = 1 - smoothstep(P.r0, P.r1, l / refL), ls = Y3(lampL[j], lampL[j + 1], lampL[j + 2]) / refL;
+      const pS = s * (1 - smoothstep(0, P.r1, ls));
       for (let c = 0; c < 3; c++) {
         const b = l + ((c === 0 ? b0 : c === 1 ? b1 : b2) - l) * P.chroma;
-        li3[c] = b * (1 + (pTint[c] - 1) * s * P.amount) + refL * P.fill * s * pTint[c] + lampL[j + c];
+        li3[c] = b * (1 + (P.tint[c] - 1) * s * P.amount) + refL * P.fill * s * P.tint[c] + lampL[j + c];
       }
       const la = Y3(lin[j], lin[j + 1], lin[j + 2]), kd = 1 - pS * P.desat;
       for (let c = 0; c < 3; c++) al3[c] = la + (lin[j + c] - la) * kd;
@@ -47,19 +64,17 @@ export function composeSurface(G, st, { light, lampL, specT, lin }) {
       col[j] = v;
     }
   }
-  // воздушная перспектива: с глубиной цвет теряет насыщенность, сдвигается к aerial.color и чуть светлеет (дымка)
-  const AE = st.aerial;
-  if (AE) {
-    const ay = Math.max(1e-4, Y3(...AE.color)), aT = AE.color.map((v) => v / ay), aL = AE.color.map(lin22);
-    for (let i = 0; i < n; i++) {
-      if (!mask[i]) continue;
-      const a = (1 - Math.exp(-Math.min(200, Math.max(0, Pz[i] - AE.start)) * AE.density)) * AE.amount;
-      if (a <= 1e-4) continue;
-      const j = i * 3, l = Y3(col[j], col[j + 1], col[j + 2]), kd = 1 - a * AE.desat;
-      for (let c = 0; c < 3; c++) col[j + c] = (l + (col[j + c] - l) * kd) * (1 + (aT[c] - 1) * a * AE.shift) + aL[c] * a * AE.lift;
-    }
+}
+
+/** Полоса строк воздушной перспективы (на месте в col). */
+export function kAerial({ W, mask, Pz, col, start, density, amount, desat, shift, lift, aT, aL }, y0, y1) {
+  for (let i = y0 * W, iEnd = y1 * W; i < iEnd; i++) {
+    if (!mask[i]) continue;
+    const a = (1 - Math.exp(-Math.min(200, Math.max(0, Pz[i] - start)) * density)) * amount;
+    if (a <= 1e-4) continue;
+    const j = i * 3, l = Y3(col[j], col[j + 1], col[j + 2]), kd = 1 - a * desat;
+    for (let c = 0; c < 3; c++) col[j + c] = (l + (col[j + c] - l) * kd) * (1 + (aT[c] - 1) * a * shift) + aL[c] * a * lift;
   }
-  return { col, emL };
 }
 
 /** Небо (на месте в col): пиксели без поверхности и покрытия. gradient — свой градиент с облаками из прохода color. */
@@ -80,8 +95,7 @@ export function composeSky(G, st, col, lin) {
   }
   const cloudK = bd.clouds ?? 1.2;
   const moon = bd.moon ? { x: (bd.moon.x <= 1 ? bd.moon.x * W0 : bd.moon.x) * k, y: (bd.moon.y ?? 120) * k, r: (bd.moon.r ?? 38) * k } : null;
-  let sd = 3;
-  const srnd = () => ((sd = (sd * 16807) % 2147483647) / 2147483647);
+  const srnd = makeRng(3);
   const tH = Math.max(0.01, (G.cam.cm.horEff + 120) / H0);
   for (let y = 0; y < H; y++) {
     const tY = clamp01(y / H / tH);

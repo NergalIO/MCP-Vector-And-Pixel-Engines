@@ -39,32 +39,74 @@ function pipeline(key, code, entry) {
   return p;
 }
 
+const residentBufs = new Map(); // rid → { g, size } — резидентные входы кадра (gpu.mjs gpuResident)
 const S = () => GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
 const pad4 = (n) => Math.max(16, Math.ceil(n / 4) * 4);
 
+/**
+ * Пул буферов GPU: задания одного кадра (и соседних кадров) просят буферы тех же размеров, поэтому буфер после
+ * задания возвращается в пул по (вид, размер), а не уничтожается. Буфер из пула не обнулён — выходные буферы
+ * ('out', временные) перед заданием заливаются нулями (clearBuffer на GPU), как новые. Лишнее сверх POOL_BYTES
+ * уничтожается (самые давние).
+ */
+const POOL_BYTES = 768 << 20;
+const free = new Map(); // `${kind}|${size}` → [GPUBuffer]
+let freeBytes = 0;
+const order = []; // [ключ, буфер, размер] в порядке возврата
+const USAGE = { s: () => S(), u: () => GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, r: () => GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST };
+function take(kind, size) {
+  const list = free.get(`${kind}|${size}`);
+  if (list && list.length) {
+    const g = list.pop();
+    freeBytes -= size;
+    const i = order.findIndex((o) => o[1] === g);
+    if (i >= 0) order.splice(i, 1);
+    return { g, fresh: false };
+  }
+  return { g: device.createBuffer({ size, usage: USAGE[kind]() }), fresh: true };
+}
+function give(kind, size, g) {
+  const k = `${kind}|${size}`;
+  if (!free.has(k)) free.set(k, []);
+  free.get(k).push(g);
+  order.push([k, g, size]);
+  freeBytes += size;
+  while (freeBytes > POOL_BYTES && order.length) {
+    const [ok, og, os] = order.shift();
+    const l = free.get(ok);
+    l.splice(l.indexOf(og), 1);
+    freeBytes -= os;
+    og.destroy();
+  }
+}
+
 async function run(job) {
   const { key, code, bufs, passes } = job;
-  const made = [];
+  const made = []; // [вид, размер, буфер] — в пул после задания
+  const get = (kind, size) => { const r = take(kind, size); made.push([kind, size, r.g]); return r; };
+  let ok = false;
   try {
     device.pushErrorScope('validation');
     device.pushErrorScope('out-of-memory');
+    const enc = device.createCommandEncoder();
     const gb = bufs.map((b) => {
       const bytes = b.data ? b.data.byteLength : b.bytes;
-      const g = device.createBuffer({ size: pad4(bytes), usage: S() });
-      made.push(g);
-      if (b.data && b.up && b.data.byteLength) {
-        if (b.data.byteLength % 4) { const t = new Uint8Array(pad4(b.data.byteLength)); t.set(new Uint8Array(b.data.buffer, b.data.byteOffset, b.data.byteLength)); device.queue.writeBuffer(g, 0, t); }
-        else device.queue.writeBuffer(g, 0, b.data);
-      }
+      const size = pad4(bytes);
+      if (b.rid) { const r = residentBufs.get(b.rid); if (r) return r.g; } // уже на GPU с прошлого этапа кадра
+      const { g, fresh } = b.rid ? take('s', size) : get('s', size);
+      if (b.rid) residentBufs.set(b.rid, { g, size }); // живёт до release, не возвращается в пул после задания
+      if (b.data && b.up) {
+        // загрузка — на весь буфер (хвост до размера нулями): буфер из пула со старыми данными так полностью перезаписан
+        if (b.data.byteLength === size) device.queue.writeBuffer(g, 0, b.data);
+        else { const t = new Uint8Array(size); t.set(new Uint8Array(b.data.buffer, b.data.byteOffset, b.data.byteLength)); device.queue.writeBuffer(g, 0, t); }
+      } else if (!fresh) enc.clearBuffer(g, 0, size); // не загружается (выход, временный) — с нулей, как новый
       return g;
     });
-    const enc = device.createCommandEncoder();
     for (const p of passes) {
       const pipe = pipeline(p.key || key, p.code || code, p.entry); // проход может взять свой шейдер
       const entries = [];
       if (p.uni) {
-        const u = device.createBuffer({ size: pad4(p.uni.byteLength), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        made.push(u);
+        const { g: u } = get('u', pad4(p.uni.byteLength));
         device.queue.writeBuffer(u, 0, p.uni);
         entries.push({ binding: 0, resource: { buffer: u } });
       }
@@ -78,27 +120,35 @@ async function run(job) {
     const reads = [];
     bufs.forEach((b, i) => {
       if (!b.read) return;
-      const st = device.createBuffer({ size: pad4(b.data.byteLength), usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-      made.push(st);
+      const { g: st } = get('r', pad4(b.data.byteLength));
       enc.copyBufferToBuffer(gb[i], 0, st, 0, pad4(b.data.byteLength));
       reads.push([st, b.data]);
     });
     device.queue.submit([enc.finish()]);
-    const oom = await device.popErrorScope(), val = await device.popErrorScope();
+    // ошибки и чтение ждём вместе: каждое ожидание Dawn — круг опроса событий, последовательно они складывались
+    const scopes = Promise.all([device.popErrorScope(), device.popErrorScope()]);
+    const maps = Promise.allSettled(reads.map(([st]) => st.mapAsync(GPUMapMode.READ)));
+    const [oom, val] = await scopes;
     if (val || oom) throw new Error((val || oom).message);
-    await Promise.all(reads.map(([st]) => st.mapAsync(GPUMapMode.READ)));
+    for (const m of await maps) if (m.status === 'rejected') throw m.reason;
     for (const [st, data] of reads) {
       new Uint8Array(data.buffer, data.byteOffset, data.byteLength).set(new Uint8Array(st.getMappedRange(), 0, data.byteLength));
       st.unmap();
     }
+    ok = true;
   } finally {
-    for (const g of made) g.destroy();
+    // после ошибки буферы могли остаться в неизвестном состоянии (staging замаплен) — их не возвращаем
+    for (const [kind, size, g] of made) { if (ok) give(kind, size, g); else g.destroy(); }
   }
 }
 
 parentPort.on('message', async (msg) => {
   if (msg.type === 'init') {
     try { parentPort.postMessage({ ready: await init() }); } catch (e) { parentPort.postMessage({ failed: String(e?.message || e) }); }
+    return;
+  }
+  if (msg.type === 'release') {
+    for (const id of msg.ids) { const r = residentBufs.get(id); if (r) { residentBufs.delete(id); give('s', r.size, r.g); } }
     return;
   }
   const { ctrl, err } = msg;

@@ -1,15 +1,13 @@
 // Kontur → Unity: общие вещи экспорта — GUID, поиск проекта, перевод света и режимов наложения.
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, relative, resolve, sep, basename } from 'node:path';
+import { dirname, join, resolve, sep, basename } from 'node:path';
+import { toLin, toGam } from '../engine/kontur.js';
+import { crc32 as crc32Bytes } from './normals.mjs';
+import { posixRel } from './paths.mjs';
 
 /** CRC32 строки (UTF-8) — так Unity хеширует путь объекта в привязках анимации. Своя: zlib.crc32 есть только с Node 20.15. */
-const CRC_TABLE = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
-export function crc32(s) {
-  let c = 0xffffffff;
-  for (const b of Buffer.from(String(s), 'utf8')) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
+export const crc32 = (s) => crc32Bytes(Buffer.from(String(s), 'utf8'));
 
 /** Стабильный GUID Unity (32 hex) из строки: повторный экспорт в то же место даёт те же GUID — ссылки в сценах не рвутся. */
 export const guidOf = (key) => createHash('md5').update('kontur:' + key).digest('hex');
@@ -37,7 +35,7 @@ export function unityAssetsRoot(dir) {
  * чтобы две сцены, выгруженные вне проекта в одноимённые папки, не получили одинаковых GUID.
  */
 export function assetKey(file, assetsRoot) {
-  return (assetsRoot ? relative(assetsRoot, resolve(file)) : 'abs:' + resolve(file)).split(sep).join('/');
+  return assetsRoot ? posixRel(assetsRoot, resolve(file)) : ('abs:' + resolve(file)).split(sep).join('/');
 }
 
 /**
@@ -61,9 +59,8 @@ export function unityColorSpace(assetsRoot) {
   return m && m[1] === '0' ? 'gamma' : 'linear';
 }
 
-/** sRGB ↔ линейные значения (точные формулы sRGB). */
-export const srgbToLinear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-export const linearToSrgb = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055);
+/** sRGB ↔ линейные значения (точные формулы sRGB — toLin/toGam движка). */
+export const srgbToLinear = toLin, linearToSrgb = toGam;
 
 /*
  * Свет Kontur → URP 2D. Как считает URP (сверено с исходниками URP 17 и рендером Unity 6):

@@ -5,7 +5,13 @@ export const clamp = (v, a = 0, b = 1) => (v < a ? a : v > b ? b : v);
 export const lerp = (a, b, u) => a + (b - a) * u;
 export const TAU = Math.PI * 2;
 export const DEG = Math.PI / 180;
+/** Округление до d знаков после запятой. */
+export const roundTo = (n, d) => { const k = 10 ** d; return Math.round(n * k) / k; };
+/** Отдельный поток ГСЧ Парка — Миллера от сида s (своё состояние у каждого потока). */
+export const pmStep = (x) => (x * 16807) % 2147483647;
+export const makeRng = (s = 1) => { let x = s; return () => (x = pmStep(x)) / 2147483647; };
 export const r3 = (n) => Math.round(n * 1000) / 1000;
+export const r4 = (n) => roundTo(n, 4);
 const FRAC = Array.from({ length: 1000 }, (_, f) => (f ? '.' + String(f).padStart(3, '0').replace(/0+$/, '') : ''));
 /**
  * Строка числа, округлённого до 0,001 — то же, что String(r3(n)), но без медленного dtoa:
@@ -64,6 +70,15 @@ export function hashStr(s) {
 export const fmt = (n) => (typeof n === 'number' ? r3(n) : n);
 
 
+/** Векторы 3D (массивы [x, y, z]). */
+export const vec3 = {
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  mul: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+};
+
 export const mat = {
   id: () => [1, 0, 0, 1, 0, 0],
   mul: (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]],
@@ -78,5 +93,19 @@ export const mat = {
     // R·K = [cs, sn, cs·k − sn, sn·k + cs]
     const a = cs * scaleX, b = sn * scaleX, c = (cs * k - sn) * scaleY, d = (sn * k + cs) * scaleY;
     return [a, b, c, d, x - (a * anchorX + c * anchorY), y - (b * anchorX + d * anchorY)];
+  },
+  /**
+   * Разложить [a b c d e f] в трансформацию узла: translate · rotate · skewX · scale (обратное compose без якоря).
+   * Точно для любой невырожденной матрицы (отражение — отрицательный scaleY); вырожденная: нулевой столбец x —
+   * нули, нулевой scaleY — без наклона.
+   */
+  decompose: (m) => {
+    const [a, b, c, d, e, f] = m;
+    const sx = Math.hypot(a, b);
+    if (sx < 1e-12) return { x: e, y: f, rotation: 0, scaleX: 0, scaleY: 0, skewX: 0 };
+    const th = Math.atan2(b, a), cs = Math.cos(th), sn = Math.sin(th);
+    const c2 = cs * c + sn * d, sy = -sn * c + cs * d;
+    const skew = Math.abs(sy) > 1e-12 ? Math.atan(c2 / sy) : 0;
+    return { x: e, y: f, rotation: (th * 180) / Math.PI, scaleX: sx, scaleY: sy, skewX: (skew * 180) / Math.PI };
   },
 };

@@ -101,7 +101,7 @@ test('текст по кривой: textPath на путь узла (со сдв
   ops.addNode(sc, { id: 'tx', type: 'text', props: { text: 'Hi', path: 'arc', pathOffset: 0.1 } });
   ops.addNode(sc, { id: 'ty', type: 'text', props: { text: 'Yo', path: 'M0 50 L200 50', textAlign: 'left' } });
   const s = renderSVG(sc, 0);
-  assert.match(s, /<path id="k-tp-tx" d="M10 0C/);
+  assert.match(s, /<path id="k-tp-tx" d="M10 0L110 0"/);
   assert.match(s, /<textPath href="#k-tp-tx" startOffset="60%">Hi<\/textPath>/);
   assert.match(s, /<textPath href="#k-tp-ty" startOffset="0%">Yo<\/textPath>/);
   // переименование узла пути ведёт за собой ссылку текста

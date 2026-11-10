@@ -1,21 +1,20 @@
 // Попиксельные детали материалов (этап 2): компоновщик знает для каждого пикселя мировую позицию P, нормаль и
 // номер материала (проход matId) и считает вариацию цвета, грязь, износ рёбер, плиточные текстуры в перспективе
 // и микрорельеф — без тысяч узлов-деталей. scene.materials[name] = { noise, grime, wear, tex, bump }.
-import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { noise3, parseColor, surfaceAxes } from '../engine/kontur.js';
+import { noise3, surfaceAxes } from '../engine/kontur.js';
 import { decodePNG } from './normals.mjs';
+import { fileStamp, readSrc } from './files.mjs';
+import { clamp01, lin22, rgb } from './lit/util.mjs';
 import { rows, f32 } from './lit/pool.mjs';
 import { viaGPU } from './lit/gpu.mjs';
 import { gpuMaterials, gpuMaterialsOK } from './lit/gpu-materials.mjs';
 
-const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
-const lin22 = (v) => Math.pow(Math.max(0, v), 2.2);
-/** Цвет → линейный RGB 0..1. */
+/** Цвет → линейный RGB 0..1 (массив — все элементы; неразборчивый цвет — def как есть). */
 const linRGB = (c, def) => {
-  if (Array.isArray(c)) return c.map((v) => lin22(v));
-  const p = c != null ? parseColor(String(c)) : null;
-  return p ? [lin22(p[0]), lin22(p[1]), lin22(p[2])] : def;
+  if (Array.isArray(c)) return c.map(lin22);
+  const p = rgb(c, null);
+  return p ? p.map(lin22) : def;
 };
 const fbm3 = (x, y, z, oct = 3, seed = 0) => { let s = 0, a = 1, f = 1, n = 0; for (let o = 0; o < oct; o++) { s += a * noise3(x * f, y * f, z * f, seed + o * 17); n += a; a *= 0.5; f *= 2; } return s / n; };
 /** fbm с дробным числом октав: последняя гаснет плавно (без шва там, где октава перестаёт помещаться в пиксель). */
@@ -27,27 +26,15 @@ const fbm3f = (x, y, z, oct, seed = 0) => {
 /** Хеш целых → [0, 1). */
 const h2 = (a, b, s = 0) => { let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(s | 0, 1442695041)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 
-const texCache = new Map(), stamps = new Map();
-/** Ключ файла «путь|время изменения»; stat — не чаще раза в секунду (loadTex зовётся на каждый пиксель фактуры). */
-function fileStamp(p) {
-  const now = Date.now(), c = stamps.get(p);
-  if (c && now - c.t < 1000) return c.key;
-  let key;
-  try { key = `${p}|${statSync(p).mtimeMs}`; } catch { key = `${p}|missing`; }
-  stamps.set(p, { t: now, key });
-  return key;
-}
+const texCache = new Map();
 /** Картинка текстуры: data: URI PNG или путь (относительно baseDir); кеш по полному пути и времени изменения. */
 function loadTex(src, baseDir) {
   const inline = src.startsWith('data:'), p = inline ? null : resolve(baseDir || '.', src);
-  let key = src;
-  if (!inline) key = fileStamp(p);
+  // stat — не чаще раза в секунду: loadTex зовётся на каждый пиксель фактуры
+  const key = inline ? src : fileStamp(p, { throttleMs: 1000 });
   if (texCache.has(key)) return texCache.get(key);
   let img = null;
-  try {
-    if (inline) img = decodePNG(Buffer.from(src.slice(src.indexOf(',') + 1), 'base64'));
-    else img = decodePNG(readFileSync(p));
-  } catch { img = null; }
+  try { img = decodePNG(readSrc(src, baseDir)); } catch { img = null; }
   texCache.set(key, img);
   return img;
 }

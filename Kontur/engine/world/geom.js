@@ -1,10 +1,11 @@
 // Kontur world3d — Векторы 3D, нормаль многоугольника, триангуляция с дырами.
+import { TAU, vec3 } from '../kontur.js';
 
 export const sub = (a, b) => (a.length === 3 ? [a[0] - b[0], a[1] - b[1], a[2] - b[2]] : a.map((v, i) => v - b[i]));
 export const add = (a, b) => (a.length === 3 ? [a[0] + b[0], a[1] + b[1], a[2] + b[2]] : a.map((v, i) => v + b[i]));
 export const mul = (a, k) => (a.length === 3 ? [a[0] * k, a[1] * k, a[2] * k] : a.map((v) => v * k));
-export const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-export const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+export const dot = vec3.dot;
+export const cross = vec3.cross;
 export const norm = (a) => mul(a, 1 / ((a.length === 3 ? Math.hypot(a[0], a[1], a[2]) : Math.hypot(...a)) || 1));
 export const avg = (ps) => { let x = 0, y = 0, z = 0; for (const p of ps) { x += p[0]; y += p[1]; z += p[2]; } const k = 1 / ps.length; return [x * k, y * k, z * k]; };
 /** Расстояние и длина без промежуточных массивов. */
@@ -82,7 +83,7 @@ export function triangulate(ps, holes = []) {
   return tris;
 }
 /* ============================== ТЕЛА ВРАЩЕНИЯ, СФЕРЫ, АРКИ, МАРКИЗЫ ============================== */
-export const TAU = Math.PI * 2;
+export { TAU };
 export const ang2 = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1])));
 export const nrm2 = (a) => { const l = Math.hypot(a[0], a[1]) || 1; return [a[0] / l, a[1] / l]; };
 export const sub2 = (a, b) => [a[0] - b[0], a[1] - b[1]];
