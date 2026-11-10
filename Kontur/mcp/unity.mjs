@@ -10,11 +10,13 @@
 //                              свет — Light2D (точечные + общий «Ambient»), режимы наложения — материал Kontur/Sprite Blend
 //   Kontur/Runtime/KonturPlayer.cs, KonturBlend.shader — один раз на проект (GUID постоянные)
 // Формат файлов снят с Unity 6000.6 (эталон, который Unity пишет сам) и проверяется импортом в Unity.
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
-import { join, relative, sep, dirname } from 'node:path';
+import { readFileSync, existsSync, rmSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseColor } from '../engine/kontur.js';
 import { bakeLayers, layersManifest, SANE } from './layers.mjs';
+import { posixRel, writeFileEnsured } from './paths.mjs';
+import { ambientRGB } from './scene_util.mjs';
 import { crc32, guidOf, fileIdOf, unityAssetsRoot, unityColorSpace, assetKey, fitUrpLight, urpAmbient, UNITY_BLEND, num, ystr } from './unity_common.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -569,7 +571,7 @@ export async function exportUnity(scene, dir, opts = {}) {
   const toUnity = (x, y) => [(x - ox) / ppu, -(y - oy) / ppu];
   const point = !!px && !px.aa;
   const written = [];
-  const put = (f, text, meta) => { mkdirSync(dirname(f), { recursive: true }); if (text != null) writeFileSync(f, text); if (meta) writeFileSync(f + '.meta', meta); written.push(f); };
+  const put = (f, text, meta) => { if (text != null) writeFileEnsured(f, text); if (meta) writeFileEnsured(f + '.meta', meta); written.push(f); };
 
   // 1. текстуры: .meta с постоянными GUID
   const spriteGuid = new Map();
@@ -649,7 +651,7 @@ export async function exportUnity(scene, dir, opts = {}) {
   });
   let lightCount = 0;
   if (pipeline === 'urp' && lights.length) {
-    const amb = (parseColor(scene.ambient || '#4a4f5c') || [0.29, 0.31, 0.36]).slice(0, 3);
+    const amb = ambientRGB(scene);
     const linear = colorSpace === 'linear', ambW = urpAmbient(amb, linear);
     const go = id('ambient', 'go'), tr = id('ambient', 'tr'), lc = id('ambient', 'light');
     docs.push(gameObject(go, 'Ambient', [tr, lc]));
@@ -740,13 +742,13 @@ MonoBehaviour:
 
   const stat = nodes.filter((n) => n.type === 'static').length;
   const notes = [];
-  if (!assetsRoot) notes.push(`Папка не внутри проекта Unity: скопируйте её в Assets целиком. ${relative(dir, runtimeDir).split(sep).join('/') || runtimeDir} (скрипт и шейдер) нужна в проекте один раз — если она там уже есть, эту копию удалите, иначе будет два класса KonturPlayer.`);
+  if (!assetsRoot) notes.push(`Папка не внутри проекта Unity: скопируйте её в Assets целиком. ${posixRel(dir, runtimeDir) || runtimeDir} (скрипт и шейдер) нужна в проекте один раз — если она там уже есть, эту копию удалите, иначе будет два класса KonturPlayer.`);
   if (pipeline === 'builtin' && b.lights?.length === 0 && scene.nodes.some((n) => n.type === 'light')) notes.push('Свет не перенесён: во встроенном конвейере нет 2D-света (нужен URP).');
   if (blendModes.some((m) => !UNITY_BLEND[m].exact)) notes.push(`Режимы ${blendModes.filter((m) => !UNITY_BLEND[m].exact).join(', ')} переданы приблизительно (точно — multiply, screen).`);
   if (unknownBlend.length) notes.push(`Режимы ${[...new Set(unknownBlend)].join(', ')} в Unity не поддержаны — слой рисуется обычным.`);
   const summary = `Экспорт для Unity (${pipeline === 'urp' ? 'URP 2D' : 'встроенный конвейер'}): ${dir}
 Префаб ${title}.prefab: слоёв ${nodes.length} (статичных ${stat}, анимированных ${nodes.length - stat}), PNG-кадров: ${frameCount}${clipFiles.length ? `, клипы (Animator): ${clipFiles.map((c) => `${c.name}@${fpsOf(clips.find((x) => x.name === c.name))}fps`).join(', ')}` : ''}${b.normals ? ', карты нормалей: да' : ''}${lightCount ? `, свет: ${lightCount} Light2D + Ambient (подобран под ${colorSpace === 'linear' ? 'Linear' : 'Gamma'})` : ''}${px ? `, пиксели ×${px.size} (фильтр Point)` : ''}${(scene.states || []).length ? `, состояния: ${scene.states.map((g) => g.name).join(', ')}` : ''}, ${((Date.now() - t0) / 1000).toFixed(1)}s.
 Масштаб: ${ppu} px сцены = 1 единица Unity, ${opts.origin === 'top-left' ? 'левый верхний угол' : 'центр'} сцены — в точке префаба.
-Из кода: GetComponent<KonturPlayer>().Play("клип"), SetState("группа", "вариант"). Скрипт и шейдер: ${relative(dir, runtimeDir).split(sep).join('/') || runtimeDir}.${notes.length ? '\n' + notes.join('\n') : ''}`;
+Из кода: GetComponent<KonturPlayer>().Play("клип"), SetState("группа", "вариант"). Скрипт и шейдер: ${posixRel(dir, runtimeDir) || runtimeDir}.${notes.length ? '\n' + notes.join('\n') : ''}`;
   return { summary, manifest, files: written };
 }

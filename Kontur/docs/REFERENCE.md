@@ -15,19 +15,22 @@
 
 ## Узлы
 
-| type | Свойства геометрии | Примечание |
+<!-- gen:types -->
+| type | Свойства | Примечание |
 |---|---|---|
-| `group` | — | контейнер, дети наследуют трансформацию и время |
-| `rect` | `width`, `height`, `radius` | центр в (x, y) |
-| `circle` / `ellipse` | `r` или `rx`, `ry` | |
-| `polygon` | `sides`, `radius`, `cornerRadius` | |
-| `star` | `points`, `outerRadius`, `innerRadius`, `cornerRadius` | |
-| `line` | `x1`, `y1`, `x2`, `y2` | обводка по умолчанию белая |
-| `path` | `d` (SVG path / описание фигуры) или `points` + `smooth` + `closed` | |
-| `blob` | `radius`, `points`, `amount`, `frequency`, `speed`, `seed`, `tension`, `stretchX/Y` | «живая» органическая клякса — анимируется сама |
-| `text` | `text`, `fontSize`, `fontFamily`, `fontWeight`, `textAlign`, `letterSpacing`, `textReveal` (0..1) | |
-| `image` | `src`, `width`, `height`, `fit`, `pixelated`, `sheet`, `frame` | растровый слой, центр в (x, y) |
+| `group` | `bone` (false), `ik`, `time` | контейнер, дети наследуют трансформацию и время |
+| `rect` | `width` (100), `height` (100), `radius` (0) | центр в (x, y) |
+| `ellipse` / `circle` | `rx` (50), `ry` (50), `r` |  |
+| `polygon` | `sides` (6), `radius` (50), `cornerRadius` (0) |  |
+| `star` | `points` (5), `outerRadius` (50), `innerRadius` (22), `cornerRadius` (0) |  |
+| `path` | `d`, `points`, `smooth`, `closed` |  |
+| `line` | `x1` (0), `y1` (0), `x2` (100), `y2` (0) | обводка по умолчанию белая |
+| `blob` | `radius` (80), `points` (8), `amount` (0.25), `frequency` (1.2), `speed` (0.5), `seed` (1), `tension` (1), `stretchX` (1), `stretchY` (1) | «живая» органическая клякса — анимируется сама |
+| `text` | `text`, `fontSize` (48), `fontFamily`, `fontWeight` (600), `textAlign`, `letterSpacing` (0), `textReveal` (1), `path`, `pathOffset` (0) |  |
+| `image` | `src`, `width` (100), `height` (100), `fit`, `pixelated` (false), `sheet`, `frame`, `normalSrc`, `normalMap` | растровый слой, центр в (x, y) |
+| `instance` | `symbol`, `loop` (true), `symbolTime`, `timeOffset` (0), `timeScale` (1) | экземпляр символа из scene.symbols: своя трансформация и своё время (timeOffset, timeScale), символ — по кругу или с остановкой |
 | `light` | `z` (80), `color`, `energy` (1), `radius` (500), `falloff` (1) | точечный свет: сам не рисуется, виден в превью «Свет» и уходит в Godot как `PointLight2D`, в Unity — как `Light2D` |
+<!-- /gen:types -->
 
 Любой узел может иметь свойство `d` (или ключи `d`) — тогда его форма задаётся им, и её можно **морфить**.
 
@@ -105,6 +108,61 @@
 - `fps` — частота кадров клипа при экспорте в спрайты.
 - Студия: список «Клип» и полосы клипов на линейке; MCP: `clip_set`, `clip_remove`; `render_contact_sheet` и `export` принимают `clip`.
 - В коде: `player.setClip('walk')`, `clipRange(scene, 'walk')`, `clipTime(scene, 'walk', localT)`.
+
+## Символы и экземпляры
+
+Символ — набор узлов со своей шкалой времени (персонаж, иконка, цикл ходьбы), который рисуют узлы `instance`.
+Правка символа меняет все экземпляры.
+
+```json
+"symbols": {
+  "spark": { "duration": 1, "nodes": [ { "id": "p", "type": "star", "props": { "fill": "#ffd060" }, "keys": { "rotation": [[0, 0], [1, 72]] } } ] }
+},
+"nodes": [
+  { "id": "s1", "type": "instance", "props": { "symbol": "spark", "x": 100, "y": 200 } },
+  { "id": "s2", "type": "instance", "props": { "symbol": "spark", "x": 300, "y": 200, "timeOffset": 0.5, "timeScale": 2 } }
+]
+```
+- Узлы символа — как в сцене (`parent` — внутри символа), координаты — от точки экземпляра.
+- Время символа: локальное время экземпляра (`timeOffset`, `timeScale`, `inPoint`/`outPoint` — как у любого узла);
+  по `duration` символа — по кругу (`loop`, по умолчанию) или с остановкой на конце (`loop: false`).
+  `symbolTime` — явное время символа (можно анимировать ключами).
+- Символы могут содержать экземпляры других символов (не себя: цикл — ошибка проверки).
+- Состояния, `only` и IK основной сцены внутрь не проходят; IK внутри символа работает.
+  У внутренних элементов нет `data-node`: в студии выбирается экземпляр.
+- MCP: `symbol_define` (из `nodes` или из поддерева `from` с заменой экземпляром), `symbol_remove`;
+  в коде: `ops.defineSymbol`, `ops.symbolFromNode`, `ops.removeSymbol`.
+
+## Маркеры
+
+Именованные точки шкалы — события для кода и экспорта: `"markers": [{ "t": 1.5, "name": "boom", "data": { "strength": 2 } }]`.
+- Плеер: `player.onMarker((m, player) => …)` — при прохождении маркера во время воспроизведения (и через конец цикла).
+- `markersCrossed(scene, t0, t1, { wrap })` — какие маркеры лежат в (t0, t1].
+- Экспорт в Lottie — `markers`. MCP: `marker_set`, `marker_remove`.
+
+## Текст по кривой
+
+У `text` свойство `path` — id узла (его форма со сдвигом x/y), строка `d` или описание фигуры; `pathOffset` (0..1, можно
+анимировать) — сдвиг начала вдоль пути, `textAlign` — выравнивание относительно него. Путь задаётся в координатах
+родителя текста, собственные x/y/поворот текста тоже применяются — обычно у такого текста `x = y = 0`.
+
+```json
+{ "id": "arc", "type": "path", "props": { "d": "M100 300 Q400 50 700 300", "stroke": "#888" } },
+{ "id": "title", "type": "text", "props": { "text": "По дуге", "path": "arc", "fontSize": 40 }, "keys": { "pathOffset": [[0, -0.5], [3, 0.5]] } }
+```
+
+## Импорт SVG и экспорт в Lottie
+
+- `svg_import` (в коде `importSVG(text)` → `{ nodes, width, height, warnings }`, `insertSVG(scene, text, opts)`):
+  группы, `rect`/`circle`/`ellipse`/`line`, `path`/`polygon`/`polyline`, `text`, `image`, `<use>` и `<symbol>`,
+  простые CSS-правила из `<style>`, наследование оформления, линейные и радиальные градиенты (в т.ч. по рамке
+  фигуры). Трансформации раскладываются в `x`, `y`, `rotation`, `skewX`, `scaleX`, `scaleY`. Не переносятся:
+  clip-path, mask, filter, pattern, marker, SMIL — о них предупреждения.
+- `export` с `format: "lottie"` (в коде `exportLottie(scene, { fps, tolerance })` → `{ lottie, warnings }`):
+  кадры движка сэмплируются, поэтому переносится всё, что он считает (пружины, выражения, IK, морфинг, повторы,
+  символы). Трансформации, прозрачность, формы, сплошные и градиентные краски, толщина и штрихи обводки — ключами;
+  обрезка обводки — Trim Paths; лишние ключи отбрасываются (`tolerance` — допуск формы, 0.25). Не переносятся
+  текст, растр, маски и обрезка, фильтры, режимы наложения и дизеринг.
 
 ## Рельеф и карты нормалей
 
@@ -263,24 +321,129 @@ MCP: `render_passes` (PNG всех проходов + `normal_map` в согла
 ```json
 "lighting": { "preset": "night", "sun": { "dir": [0.35, 0.85, -0.4], "energy": 0.3 }, "exposure": 0.8 }
 ```
-Пресеты: `day` (рисованный день), `comic` (закат, комикс), `night` (ночь с фонарями), `pixel` (пиксель-арт со светом).
+Пресеты: `day` (рисованный день), `comic` (закат, комикс), `night` (ночь с фонарями), `pixel` (пиксель-арт со светом),
+`golden` (золотой час, иллюстрация), `dusk` (сумерки с фонарями), `cinematic` (GTAO, контактные тени, GI×2, глубина
+резкости, автоэкспозиция, AgX, хроматическая аберрация и зерно).
 Поля поверх пресета: `sun {dir — направление на солнце, color, energy, wrap, shadows}`, `sky {color, energy}`,
 `ground {color, energy}`, `ao {strength, radius}`, `fog {color, density, start, amount}`, `bloom {strength, threshold}`,
-`exposure`, `saturation`, `tonemap` (`aces`|`none`), `emissive`, `specular`, `groups {lamp, window, candle}`,
+`exposure`, `saturation`, `tonemap` (`aces`|`hue`|`agx`|`none`), `emissive`, `specular`, `groups {lamp, window, candle}`,
 `lightShadows`, `characters {tag, amount}`, `backdrop {mode: albedo|gradient, colors, clouds, stars, moon}`.
 Цвета света — доли без гаммы (`#ffc070` → [1, 0,75, 0,44]) или `[r,g,b]`. MCP: `lighting_set`.
 
+Цвет «как в иллюстрации» (всё выключено по умолчанию; `true` — значения по умолчанию):
+- `paint {chroma 0.45, shadow [0.55,0.45,0.75], amount 0.4, desat 0.2, range [0.12,0.7], fill 0.03}` — живописное
+  затенение. Цвет солнца и неба окрашивает поверхность лишь на долю `chroma`, поэтому розовая стена остаётся розовой.
+  Тень (доля от «полного света» в пределах `range`) сдвигает тон к `shadow` на `amount` без лишнего затемнения,
+  теряет насыщенность на `desat` и подсвечивается заливкой `fill`. Свет ламп в этом не участвует: тёплые пятна
+  остаются тёплыми.
+- `tonemap: "hue"` — ACES по максимуму канала: тон и насыщенность сохраняются, очень яркое плавно уходит в белый
+  (ACES по каналам уводит насыщенный оранжевый в жёлтый). `"agx"` — AgX: мягче и бледнее в светах.
+- `aerial {color, start 8, density 0.05, amount 0.7, desat 0.45, shift 0.5, lift 0.06}` — воздушная перспектива:
+  после `start` м цвет теряет насыщенность, сдвигается к `color` и чуть светлеет. В отличие от `fog`, яркость
+  кадра почти не меняется.
+- `ao.color` — цвет, в который уходит затенённое (AO), вместо чёрного.
+- `grade.matchRef` — палитра с референса: `"путь"` (PNG; JPEG, WebP и прочее через ffmpeg) или
+  `{src, amount 0.6, lum 0.35, chroma 0.6, zones true}`. Переносится в Lab: средняя яркость и контраст (вес `lum`),
+  разброс хромы (вес `chroma`), оттенок по зонам теней, середины и светов (`zones`). Применяется до остальной
+  цветокоррекции `grade`.
+- `textureFilter` (`true` по умолчанию) — фильтрация попиксельных фактур по следу пикселя на поверхности.
+  Вдали берётся до 8 выборок вдоль длинной оси следа, ещё дальше — средний цвет фактуры; мелкие октавы `noise`
+  и `bump` гаснут. Так плитка и доски не дают муар. Вблизи кадр не меняется. `false` — одна точка на пиксель.
+
+Постобработка — окклюзия, глобальное затенение, оптика (всё выключено по умолчанию; `true` — значения по умолчанию):
+- `ao.mode: "gtao"` — горизонтная окклюзия (GTAO/HBAO) вместо прежнего SSAO. В `dirs` (4) экранных направлениях
+  ищется наивысший горизонт с обеих сторон в радиусе `radius` **метров** (`steps` 8 выборок на сторону, затухание
+  после доли `falloff` 0.6), видимость косинусно взвешена. `bent` (true) — изогнутая нормаль: свет неба и земли
+  берётся по среднему свободному направлению (дно щели получает небо сверху, а не по своей нормали).
+  `multiBounce` — многократный отскок (Jimenez 2016): светлые поверхности теряют в щелях меньше света.
+  Персонажи-спрайты AO не темнит. `ao.color` и `ao.strength` работают и здесь.
+- `contactShadows {length 0.4, steps 14, thickness 0.12, strength 1}` — контактные тени: короткий луч от точки к солнцу
+  по буферу глубины. Ловит тени мелких деталей и ступеней, которых нет среди окклюдеров BVH. Умножаются на тень солнца.
+- `gi.bounces` (1…3) — отскоки отражённого света: второй собирает уже отражённый свет (внутренние углы светлеют,
+  цветные рефлексы уходят дальше). `gi.scale` — радиус выборок.
+- `dof {focus "auto", aperture 1, maxBlur 14, near true, samples 24}` — глубина резкости. Кружок рассеяния
+  `aperture·8·|1 − focus/глубина|` px (кадр 1280, масштабируется), не больше `maxBlur`; `focus` — метры или `"auto"`
+  (медиана глубины в центре кадра). Сбор по диску Фогеля в HDR: яркие точки дают боке, задний план не наползает на
+  резкий передний. Контур стиля `ink` размывается и бледнеет вместе с предметом. `near: false` — передний план резкий.
+- `autoExposure {key 0.18, min 0.35, max 3, amount 1}` — экспозиция приводит среднюю логарифмическую яркость кадра
+  (без 2% самых ярких: лампы, солнце) к `key`; умножается на `exposure`.
+
+Порядок конвейера: G-буфер → материалы → тени солнца и контактные → AO → солнце, небо, лампы → GI → сборка (живописные
+тени, туман, воздушная перспектива) → небо → SSR → объёмный свет → глубина резкости → bloom → автоэкспозиция →
+тонмаппинг → `grade.matchRef` → `grade` → цепочка стилей. Код этапов — `mcp/lit/*.mjs`, оркестратор — `mcp/lighting.mjs`.
+В ответе `render_frame` (`lit: "deferred"`) — время этапов и список включённых эффектов.
+
 ### Стиль `scene.style`
-Цепочка по порядку: `cel {steps, detail}`, `hatch {below, period, color}`, `kuwahara {radius}`,
-`pixelate {size, colors, bayer}`, `ink {strength, color}`, `vignette {strength}`; `enabled: false` выключает звено.
+Цепочка по порядку: `cel {steps, detail}`, `hatch {below, period, color}`, `kuwahara {radius}`, `paint {radius, sharpness}`,
+`pixelate {size, colors, bayer}`, `ink {strength, color ("albedo"), darken, depthWidth, refDepth}`, `paper {strength, color,
+tint, scale}`, `vignette {strength}`, `fxaa {threshold 0.125, subpix 0.75}` (сглаживание краёв), `sharpen {amount 0.4}`
+(адаптивная резкость по мотивам CAS), `chromatic {amount 1.5}` (хроматическая аберрация, px у края кадра 2560),
+`grain {amount 0.04, size 1.2, color false, seed}` (зерно плёнки, сильнее в средних тонах); `enabled: false` выключает звено.
 Без `style` берётся стиль пресета света. Размеры заданы для ширины 2560 px и масштабируются. MCP: `style_set`.
 
 ### Сборка мира и материалы
-`world_build` строит узлы из 3D-описания (коробки, дома с окнами и крышами, цилиндры, лестницы, мостовая, стены,
-окна, двери, трубы, плющ, фонари, облака) с поверхностями и окклюдерами; описание хранится в `props.world3d`
-группы и пересобирается при смене камеры. `material_apply` кладёт на любую грань с `surface.plane` материал
-(`brick`, `stone`, `plaster`, `wood`, `tile`, `cobble`) — детали с наклонёнными нормалями, обрезанные контуром грани.
-В коде — `engine/world3d.js` (`Scene`, `box`, `house`, `MAT`, `toNodes`, `buildWorld`).
+`world_build` строит узлы из 3D-описания (метры, Y вверх, Z вглубь) с поверхностями и окклюдерами; описание
+хранится в `props.world3d` группы и пересобирается при смене камеры (`camera3d_set`). `material_apply` кладёт на
+любую грань с `surface.plane` материал (`brick`, `stone`, `plaster`, `wood`, `tile`, `cobble`, …) — детали с
+наклонёнными нормалями, обрезанные контуром грани.
+
+Параметры сборки:
+- `v` — версия. **2** (по умолчанию для новых миров): у каждого предмета свой подсид `hashSeed(seed, id)`, у каждой
+  грани — свой, поэтому раскладка кирпича, горящие окна и т. п. не зависят от камеры и от правок других предметов.
+  Предметы без `id` получают id по номеру при первой сборке; id узлов — `<группа>_<id>-<k>`. Повторяющийся `id` —
+  ошибка. **1** — прежняя сборка (общий поток случайных чисел); так собираются старые миры без `v`.
+- `lod` — детализация: 0 полная, 1 (v2 по умолчанию) — без фасок, плитки и булыжника мельче ~1 px, 2 — грубее.
+- `merge` (v2 — `true`) — детали одной грани с одинаковой заливкой сливаются в составные пути с сохранением
+  порядка рисования: в десятки раз меньше узлов при том же виде.
+- `pan: [[t, dx], …]` — проезд камеры вбок на `dx` м: группы предметов получают ключи `x = −f·dx/(Z + dz)` по
+  ближней глубине (точно для граней z = const, приближённо для объёмных; свет и тени остаются на месте).
+- `tess` — адаптивная тесселяция кривых: тела вращения (`lathe`, `cyl`, фонтаны, лампы), сферы, диски, арки и их
+  окклюдеры. `true` — сегмент дуги около 6 px на экране, число — px на сегмент, `{px, min 8, max 96}`. Ближние предметы
+  глаже (силуэт, градиент нормали и тень без граней), дальние проще. По умолчанию выключена — прежние постоянные числа
+  граней; неровные контуры (`wob`) не меняются.
+- `seed`, `sky` (три цвета неба), `occ: "manual"` или `"boxes"` (тени только от явных окклюдеров), `materials` (попиксельные).
+
+Ответ `world_build`: число узлов, источников и окклюдеров, предметы с наибольшим числом узлов, ошибки и
+предупреждения схемы (обязательные поля, типы, неизвестные поля с подсказкой ближайшего имени), подсказки. В v2
+неизменённые предметы при пересборке берутся из кэша. `world_item` правит один предмет: по `id` или `index` —
+`item` (заменить), `patch` (дополнить, `null` удаляет поле), `remove`, либо `add` (новый предмет).
+
+Предметы (`!` — обязательное поле, `=` — значение по умолчанию; список строится из реестра `WORLD_ITEMS`):
+
+<!-- gen:world -->
+- **box** `{x:[a,b]!, y:[a,b]=[0,1], z:[a,b]!, color=stone, mats:{грань:[материал,цвет,опции]}, top, sides, spec, emissive, occ}` — коробка (дно видно снизу)
+- **house** `{x:[a,b]!, z:[a,b]!, h=8, y0=0, color=plaster, roof=roof, mat:plaster|stone|brick|none=plaster, ridge:z, roofType:flat|gable|hip|shed=gable, roofH=1.6, facades:[…]=["front","left","right"], doorAt, doorColor, shut, plinth, chimney, pipe, litP=0.25, skip, sides}` — дом: коробка с фасадом, крыша черепицей, окна и двери
+- **cyl** `{X!, Z!, r=0.3, y:[a,b]=[0,1], color=stone, top, bands, n=16, spec, occ}` — цилиндр (гладкая нормаль)
+- **disc** `{X!, Y=0.003, Z!, rx=0.5, rz, color=iron, spec, base, ink, wob, normal:[X,Y,Z], opacity, emissive}` — плоский эллипс: лужи, люки, ковры
+- **stairs** `{x:[a,b]!, z:[a,b]!, h=2, y0=0, steps, color=stoneHi, mat=stone, jitter}` — лестница вдоль Z
+- **ground** `{x:[a,b]!, z:[a,b]!, y=0, color=cobble, mat=cobble, matOpt:{…}, maxZ=26, spec=0.25}` — земля (горизонтальная грань)
+- **wall** `{ps:[[X,Y,Z],…]!, holes:[…], color=plaster, mat, matColor, matOpt:{…}, spec, emissive, ink, clip}` — грань-многоугольник (фронтон, арка; детали обрезаются по ней)
+- **light** `{p:[X,Y,Z]!, color=#ffc070, radius=5, energy=1, group:lamp|window|candle|fairy=lamp, shadows, anim:{…}}` — точечный источник света
+- **lamp** `{X!, Y=0, Z!, h=3, color=#ffc070, radius=5.5, energy=1.3, glow=#ffd890, anim:{…}}` — уличный фонарь со светом
+- **cloud** `{x!, y!, rx=160, ry=32, color=#fff0e0, opacity=0.55}` — облако (экранные px, остаётся небом)
+- **arch** `{x:[a,b]!, z!, y0=0, spring=2, thick=0.5, color=stone, top, margin=0.45, mat, matColor, matOpt:{…}, voussoirs=true, keystone=true, stones=9, stoneColor, back, occ}` — арка-портал в стене z: проём, свод, клинчатые камни
+- **sphere** `{X!, Y, Z!, r=0.5, R, color=#5a8040, flat=0, dome, wob, spec, emissive, ink, occ}` — сфера или купол (dome): крона, шар, купол
+- **lathe** `{X!, Z!, profile:[…]!, h, r, y0=0, color=stone, n=16, smooth, crease=50, spec, emissive, top, fill:{…}, rings:{…}, ink, occ}` — тело вращения по профилю: готовый (pot, vase, barrel, baluster, column, shade, fountainBasin) или свой [[r, y, "c"?], …]
+- **fountain** `{X!, Z!, r=2, h=1.6, color=stone, water=water, tiers=2}` — фонтан: чаша с водой, колонна, верхняя чаша
+- **awning** `{x:[a,b]!, z!, y!, depth=1.2, drop=0.5, colors:[…]=["red","cream"], stripe=0.3, scallop=0.16, valance=0.22, occ}` — маркиза в полоску с фестонами над витриной
+- **char** `{img:{…}!, X!, Y=0, Z!, flip, shadow=true, tag=chr}` — персонаж-картинка с тенью и окклюдером
+- **text** `{on:{on}!, a=0, b=0, text!, size=0.3, color=#2e2a3c, font, weight, spacing, emissive}` — надпись на грани: вывеска, номер дома
+- **array** `{item:{…}!, count!, step:[X,Y,Z]!, at:[X,Y,Z]=[0,0,0]}` — ряд копий предмета: item задан в своих координатах, копия k сдвинута на at + k·step (сдвигаются x, y, z, X, Y, Z, y0, p, ps, holes, on, spring, top)
+- **scatter** `{item:{…}!, area:{…}!, count!, minDist=1, y=0}` — рассыпь копий предмета по площадке (случайно, не ближе minDist): item — в своих координатах вокруг (0, 0, 0)
+- **slab** `{x:[a,b]!, z:[a,b]!, y=0, t=0.2, color=stone, mats:{грань:[материал,цвет,опции]}, occ}` — плита толщиной t (балкон, козырёк, ступень): коробка с видимым дном
+- **ramp** `{x:[a,b]!, z:[a,b]!, y:[a,b]!, base=0, color=stone, mat, matColor, sides=true}` — пандус: наклонный верх от высоты y[0] у z[0] до y[1] у z[1], боковины
+- **road** `{x:[a,b]!, z:[a,b]!, y=0, color=#5d5752, lines=true, lineColor=#e8dcc0, curb=0.15, curbW=0.25, curbColor=stoneHi, walk=2, walkColor=stone, walkMat=slabs}` — улица: проезжая часть, разметка, бордюры и тротуары
+- **window** `{on:{on}!, a, b, w=0.84, h=1.2, lit, shut, box}` — окно с наличником, переплётом, ставнями, ящиком цветов
+- **door** `{on:{on}!, a, b, w=1.1, h=2.1, color=wood}` — арочная дверь
+- **pipe** `{on:{on}!, a, b, h}` — водосточная труба
+- **ivy** `{on:{on}!, a, b, w=1.5, h=3, density=80}` — плющ
+Общие поля любого предмета: id, name, key, pmat.
+<!-- /gen:world -->
+
+В коде — `engine/world3d.js` (реэкспорт модулей `engine/world/`): `buildWorld`, `toNodes`, `toScene`, `Scene`,
+построители (`box`, `house`, `lathe`, `arch`…), `checkWorldItem`. Расширение: `registerWorldItem(type, {doc,
+params, build})`, `registerMaterial(name, fn, doc)`, `registerProfile(name, fn)`. Эталоны сборки —
+`test/world.golden.json` (`node test/world-golden.mjs [--update]`).
 
 ### Рендер и экспорт
 - `render_frame` с `lit: "deferred"` (`debug: true` — лист «цвет | нормали / тени×AO | итог»), кнопка
@@ -335,18 +498,22 @@ MCP: `render_passes` (PNG всех проходов + `normal_map` в согла
 
 Применяются по порядку поверх ключей. Общие поля: `enabled`, `start`, `end`, `fadeIn`, `fadeOut`, `weight` (0..1).
 
-| type | Что делает | Параметры |
+<!-- gen:modifiers -->
+| type | Что делает | Параметры (по умолчанию) |
 |---|---|---|
-| `wiggle` | плавный шум | `prop`/`props`, `amp` (число или массив по props), `freq`, `seed`, `octaves`, `perCopy` |
-| `oscillate` | колебания | `prop`/`props`, `amp`, `freq`, `phase`, `phaseStep` (на копию repeat), `wave`: sine/triangle/saw/square |
-| `orbit` | движение по эллипсу | `cx`, `cy`, `radius`, `radiusY`, `speed` (об/с), `phase`, `phaseStep`, `additive` |
-| `spin` | вращение | `speed` (°/с) |
-| `followPath` | вдоль пути | `path` (d / фигура / id узла), `progress` или ключи `pathProgress` или `speed`, `offset`, `offsetStep`, `orient`, `loop` |
-| `spring` | инерция/пружина | `prop`/`props`, `stiffness`, `damping`, `mass` — сглаживает резкие ключи в «живое» движение с перелётом |
-| `deform` | органическая деформация контура | `amount`, `scale`, `speed`, `seed`, `detail` |
-| `link` | связь с другим узлом | `prop`, `source`, `sourceProp`, `mul`, `add`, `delay`, `additive` |
-| `noiseColor` | дрейф оттенка | `prop`, `amount`, `speed`, `seed` |
-| `expr` | JS-выражение | `prop`/`props`, `code` — тело `function(t, v, n, i, ctx)`; ctx: noise1, noise3, fbm, lerp, clamp, ease(name,u), scene |
+| `wiggle` | Плавный шум | `prop` — свойство, `props` — несколько свойств, `amp` (10) — размах (на свойство — массив), `freq` (1) — частота, `seed` (0), `octaves` (2), `perCopy` (17) — сдвиг сида на копию repeat |
+| `oscillate` | Периодические колебания | `prop` — свойство, `props` — несколько свойств, `amp` (10), `freq` (1), `phase` (0) — градусы, `wave` (sine), `phaseStep` (0) — сдвиг фазы на копию, `propPhase` (0) |
+| `orbit` | Движение по эллипсу | `cx` (0), `cy` (0), `radius` (100), `radiusY`, `speed` (0.25) — оборотов/с, `phase` (0), `phaseStep` (0), `additive` (false) |
+| `spin` | Постоянное вращение | `speed` (90) — градусы/с |
+| `followPath` | Движение вдоль пути | `path` — d, фигура или id узла-пути, `progress`, `speed` (0.2), `orient` (false), `offset` (0), `offsetStep` (0), `loop` (true) |
+| `spring` | Физическая пружина | `prop` — свойство, `props` — несколько свойств, `stiffness` (120), `damping` (12), `mass` (1) |
+| `deform` | Органическая деформация контура шумом | `amount` (10) — px, `scale` (0.01), `speed` (0.5), `seed` (0), `detail` (0) — мин. число сегментов |
+| `link` | Связь со свойством другого узла | `prop`, `source` — id узла, `sourceProp`, `mul` (1), `add` (0), `delay` (0) — сек, `additive` (false) |
+| `noiseColor` | Плавное «плавание» оттенка | `prop` (fill), `amount` (0.15) — 0..1, `speed` (0.3), `seed` (3) |
+| `expr` | Выражение | `prop` — свойство, `props` — несколько свойств, `code` — тело функции (t, v, n, i, ctx) |
+<!-- /gen:modifiers -->
+
+Таблицы выше собираются из реестров движка (`NODE_DEFS` в engine/core/types.js, `MODIFIERS` в engine/core/modifiers.js); JSON Schema сцены — [scene.schema.json](scene.schema.json). Модификатор `expr` исполняет безопасное подмножество JS (`const`/`let`, `if`/`else`, `return`, арифметика, тернарный оператор, `Math.*`); полный JavaScript — только в браузере или при `KONTUR_TRUST_EXPR=1` на сервере.
 
 ## Пресеты
 `popIn`, `fadeOut`, `drawOn`, `morphSequence`, `float`, `pulse`, `stagger`, `typewriter`, `orbitRing` — макросы,

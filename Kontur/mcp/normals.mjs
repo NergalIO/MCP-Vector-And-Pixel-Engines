@@ -1,7 +1,9 @@
 // Карты нормалей: PNG-кодек без зависимостей, карта высот → нормали, рельеф из альфы/яркости, превью освещения.
 import { inflateSync, deflateSync } from 'node:zlib';
 import { renderSVG } from '../engine/kontur.js';
-import { svgToPng } from './render.mjs';
+import { svgToRGBA } from './render.mjs';
+import { readSrc, toDataURI } from './files.mjs';
+import { Y3, Y601, unorm8, rgb, tileImages, grayToRGBA } from './lit/util.mjs';
 
 /* ============================== PNG ============================== */
 const CRC = (() => {
@@ -9,11 +11,14 @@ const CRC = (() => {
   for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
   return t;
 })();
-const crc32 = (buf) => { let c = 0xffffffff; for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+/** CRC32 байтов (Buffer / Uint8Array) — для чанков PNG и путей Unity (unity_common: по байтам UTF-8). */
+export const crc32 = (buf) => { let c = 0xffffffff; for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
 
+/** Байты — PNG (по сигнатуре)? */
+export const isPng = (b) => !!b && b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;
 /** PNG → {width, height, data: Uint8Array RGBA}. 8 бит, все типы цвета, без interlace. */
 export function decodePNG(buf) {
-  if (buf.readUInt32BE(0) !== 0x89504e47) throw new Error('Не PNG');
+  if (!isPng(buf)) throw new Error('Не PNG');
   let pos = 8, w, h, depth, ctype, inter, palette = null, trns = null;
   const idat = [];
   while (pos < buf.length) {
@@ -64,8 +69,8 @@ export function decodePNG(buf) {
   return { width: w, height: h, data: out };
 }
 
-/** RGBA → PNG Buffer. */
-export function encodePNG({ width: w, height: h, data }) {
+/** RGBA → PNG Buffer. level — сжатие deflate (1 — быстро, для промежуточных кадров видео; 6 — по умолчанию). */
+export function encodePNG({ width: w, height: h, data }, { level = 6 } = {}) {
   const stride = w * 4, raw = Buffer.alloc((stride + 1) * h);
   for (let y = 0; y < h; y++) {
     raw[y * (stride + 1)] = 2; // фильтр Up — хорошо сжимает плавные карты
@@ -79,7 +84,7 @@ export function encodePNG({ width: w, height: h, data }) {
   };
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
-  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw, { level: 6 })), chunk('IEND', Buffer.alloc(0))]);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw, { level })), chunk('IEND', Buffer.alloc(0))]);
 }
 
 /* ============================== поля ============================== */
@@ -110,7 +115,7 @@ function boxBlur(src, w, h, r) {
 }
 const luminance = (img) => {
   const { width: w, height: h, data } = img, L = new Float32Array(w * h);
-  for (let i = 0; i < w * h; i++) L[i] = (0.2126 * data[i * 4] + 0.7152 * data[i * 4 + 1] + 0.0722 * data[i * 4 + 2]) / 255;
+  for (let i = 0; i < w * h; i++) L[i] = Y3(data[i * 4], data[i * 4 + 1], data[i * 4 + 2]) / 255;
   return L;
 };
 /** Расстояние до края непрозрачной области (фаска 3-4, в пикселях). */
@@ -189,13 +194,13 @@ export function normalsFromHeight(H, alpha, w, h, { strength = 3, blur = 1, yUp 
 export function lightImage(color, normal, lights, { ambient = [0.29, 0.31, 0.36], yUp = true } = {}) {
   const { width: w, height: h } = color, out = new Uint8Array(w * h * 4);
   const L = lights.map((l) => {
-    const c = parseCssColor(l.color);
+    const c = lightRGB(l.color);
     return { x: l.x, y: l.y, z: l.z ?? 80, r: Math.max(1, l.radius ?? 500), f: l.falloff ?? 1, cr: c[0] * (l.energy ?? 1), cg: c[1] * (l.energy ?? 1), cb: c[2] * (l.energy ?? 1) };
   });
   for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) {
     const o = (py * w + px) * 4;
     let nx = 0, ny = 0, nz = 1;
-    if (normal) { nx = normal.data[o] / 127.5 - 1; const ns = normal.data[o + 1] / 127.5 - 1; ny = yUp ? -ns : ns; nz = normal.data[o + 2] / 127.5 - 1; }
+    if (normal) { nx = unorm8(normal.data[o]); const ns = unorm8(normal.data[o + 1]); ny = yUp ? -ns : ns; nz = unorm8(normal.data[o + 2]); }
     let ar = ambient[0], ag = ambient[1], ab = ambient[2];
     for (const l of L) {
       const dx = l.x - px, dy = l.y - py, d2 = Math.hypot(dx, dy);
@@ -210,14 +215,8 @@ export function lightImage(color, normal, lights, { ambient = [0.29, 0.31, 0.36]
   }
   return { width: w, height: h, data: out };
 }
-function parseCssColor(c) {
-  if (Array.isArray(c)) return c;
-  // сначала 6 знаков: иначе #80b0ff читался как #80b
-  const m = /^#?([0-9a-f]{6}|[0-9a-f]{3})(?![0-9a-f])/i.exec(String(c || '#fff').trim());
-  if (!m) return [1, 1, 1];
-  const hx = m[1].length === 3 ? m[1].replace(/./g, '$&$&') : m[1];
-  return [0, 2, 4].map((i) => parseInt(hx.slice(i, i + 2), 16) / 255);
-}
+/** Цвет света: CSS-цвет движка (и hex без #), массив — как есть, иначе белый. */
+const lightRGB = (c) => rgb(typeof c === 'string' && /^[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(c.trim()) ? '#' + c.trim() : c ?? '#fff');
 
 /** Превью освещения: цвет × (ambient + diffuse·N·L) от точечного источника. */
 export function litPreview(color, normal, { x = 0.25, y = 0.2, z = 0.35, ambient = 0.35, intensity = 1.1, lightColor = [1, 0.97, 0.92], yUp = true } = {}) {
@@ -225,7 +224,7 @@ export function litPreview(color, normal, { x = 0.25, y = 0.2, z = 0.35, ambient
   const lx = x * w, ly = y * h, lz = z * Math.max(w, h);
   for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) {
     const o = (py * w + px) * 4;
-    const nx = normal.data[o] / 127.5 - 1, nyStored = normal.data[o + 1] / 127.5 - 1, nz = normal.data[o + 2] / 127.5 - 1;
+    const nx = unorm8(normal.data[o]), nyStored = unorm8(normal.data[o + 1]), nz = unorm8(normal.data[o + 2]);
     const nyDown = yUp ? -nyStored : nyStored;
     let dx = lx - px, dy = ly - py, dz = lz;
     const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
@@ -238,24 +237,11 @@ export function litPreview(color, normal, { x = 0.25, y = 0.2, z = 0.35, ambient
 }
 
 /** Склеить изображения по горизонтали (для превью). */
-export function sideBySide(imgs, gap = 8, bg = [34, 34, 34, 255]) {
-  const h = Math.max(...imgs.map((i) => i.height)), w = imgs.reduce((s, i) => s + i.width, 0) + gap * (imgs.length - 1);
-  const data = new Uint8Array(w * h * 4);
-  for (let i = 0; i < w * h; i++) data.set(bg, i * 4);
-  let ox = 0;
-  for (const im of imgs) {
-    for (let y = 0; y < im.height; y++) for (let x = 0; x < im.width; x++) {
-      const s = (y * im.width + x) * 4, d = (y * w + ox + x) * 4, a = im.data[s + 3] / 255;
-      for (let c = 0; c < 3; c++) data[d + c] = im.data[s + c] * a + data[d + c] * (1 - a);
-      data[d + 3] = 255;
-    }
-    ox += im.width + gap;
-  }
-  return { width: w, height: h, data };
-}
+export const sideBySide = (imgs, gap = 8, bg = [34, 34, 34, 255]) => tileImages(imgs, { gap, bg });
+/** Уменьшение до ширины maxW ближайшим соседом (уже не шире — как есть). */
 export function scaleDown(img, maxW) {
   if (img.width <= maxW) return img;
-  const k = img.width / maxW, w = maxW, h = Math.round(img.height / k), data = new Uint8Array(w * h * 4);
+  const k = img.width / maxW, w = maxW, h = Math.max(1, Math.round(img.height / k)), data = new Uint8Array(w * h * 4);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const sx = Math.floor(x * k), sy = Math.floor(y * k), s = (sy * img.width + sx) * 4, d = (y * w + x) * 4;
     data[d] = img.data[s]; data[d + 1] = img.data[s + 1]; data[d + 2] = img.data[s + 2]; data[d + 3] = img.data[s + 3];
@@ -275,17 +261,17 @@ export const NORMAL_DEFAULTS = {
  * opts: { t, only, viewBox, width, settings }
  */
 export async function sceneNormalMap(scene, { t = 0, only, viewBox, width, settings = {}, states, crisp } = {}) {
+  scene = heightToNormalSrc(scene);
   const st = { ...NORMAL_DEFAULTS, ...(scene.relief || {}), ...settings };
   const relief = { height: st.height, depth: st.depth, bevel: st.bevel, profile: st.profile, luma: st.luma, background: st.background ?? 0 };
   const opt = { only, viewBox, width, background: only ? false : undefined, states, crisp };
-  const [hPng, cPng] = await Promise.all([svgToPng(renderSVG(scene, t, { ...opt, mode: 'height', relief }), width), svgToPng(renderSVG(scene, t, opt), width)]);
-  const hi = decodePNG(hPng), ci = decodePNG(cPng);
+  const [hi, ci] = await Promise.all([svgToRGBA(renderSVG(scene, t, { ...opt, mode: 'height', relief }), width), svgToRGBA(renderSVG(scene, t, opt), width)]);
   const n = hi.width * hi.height, H = new Float32Array(n), A = new Float32Array(n);
   for (let i = 0; i < n; i++) { H[i] = hi.data[i * 4] / 255; A[i] = Math.max(hi.data[i * 4 + 3], ci.data[i * 4 + 3]) / 255; }
   const nm = normalsFromHeight(H, only ? A : null, hi.width, hi.height, { ...st, detail: st.detail ? luminance(ci) : null, detailAmount: st.detail });
   // 2.5D-сцены: явные нормали узлов с props.surface (проход normal) поверх нормалей из высот
   if (st.source !== 'height' && hasSurfaces(scene)) {
-    const sp = normalMapFromPass(await svgToPng(renderSVG(scene, t, { ...opt, mode: 'normal' }), width), { yUp: st.yUp !== false });
+    const sp = normalMapFromPass(await svgToRGBA(renderSVG(scene, t, { ...opt, mode: 'normal' }), width), { yUp: st.yUp !== false });
     if (sp.width === nm.width && sp.height === nm.height) for (let i = 0; i < sp.data.length; i += 4) if (sp.data[i + 3]) { nm.data[i] = sp.data[i]; nm.data[i + 1] = sp.data[i + 1]; nm.data[i + 2] = sp.data[i + 2]; nm.data[i + 3] = Math.max(nm.data[i + 3], ci.data[i + 3]); }
   }
   return { normal: nm, color: ci, height: hi, settings: st };
@@ -299,7 +285,7 @@ export function normalMapFromPass(png, { yUp = true } = {}) {
   const im = Buffer.isBuffer(png) ? decodePNG(png) : png, d = im.data, out = new Uint8Array(d.length);
   for (let i = 0; i < d.length; i += 4) {
     if (d[i + 3] < 128) { out[i] = 128; out[i + 1] = 128; out[i + 2] = 255; out[i + 3] = 0; continue; }
-    const nx = d[i] / 127.5 - 1, ny = d[i + 1] / 127.5 - 1, nzv = -(d[i + 2] / 127.5 - 1);
+    const nx = unorm8(d[i]), ny = unorm8(d[i + 1]), nzv = -unorm8(d[i + 2]);
     out[i] = Math.round((nx * 0.5 + 0.5) * 255); out[i + 1] = Math.round(((yUp ? ny : -ny) * 0.5 + 0.5) * 255); out[i + 2] = Math.round((Math.max(0, nzv) * 0.5 + 0.5) * 255); out[i + 3] = 255;
   }
   return { width: im.width, height: im.height, data: out };
@@ -315,12 +301,39 @@ export async function imageNormalMap(buf, mime, settings = {}) {
     const { imageSize } = await import('./render.mjs');
     const sz = imageSize(buf) || { width: 512, height: 512 };
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${sz.width}" height="${sz.height}"><image width="${sz.width}" height="${sz.height}" href="data:${mime};base64,${buf.toString('base64')}" xlink:href="data:${mime};base64,${buf.toString('base64')}"/></svg>`;
-    img = decodePNG(await svgToPng(svg, sz.width));
+    img = await svgToRGBA(svg, sz.width);
   }
   const { H, alpha, w, h } = heightFromImage(img, { bevel: st.bevel, profile: st.profile, depth: st.depth, base: st.base, luma: st.luma, invertLuma: st.invertLuma, lumaBlur: st.lumaBlur });
   const hasAlpha = alpha.some((a) => a < 0.98);
   const nm = normalsFromHeight(H, hasAlpha ? alpha : null, w, h, st);
-  const hv = new Uint8Array(w * h * 4);
-  for (let i = 0; i < w * h; i++) { const v = Math.round(Math.min(1, Math.max(0, H[i])) * 255); hv[i * 4] = hv[i * 4 + 1] = hv[i * 4 + 2] = v; hv[i * 4 + 3] = 255; }
-  return { normal: nm, color: img, height: { width: w, height: h, data: hv }, settings: st };
+  return { normal: nm, color: img, height: { width: w, height: h, data: grayToRGBA(w * h, (i) => H[i]) }, settings: st };
+}
+
+/* ---------- heightSrc → normalSrc (этап 3) ---------- */
+const hnCache = new Map();
+/**
+ * Узлы-картинки с props.heightSrc (карта высот, PNG: data: URI или путь от baseDir) и без normalSrc получают
+ * normalSrc — касательную карту нормалей (зелёный вверх), посчитанную Собелем по яркости (props.heightStrength, 3).
+ * Результат кэшируется по источнику и силе. Сцена не меняется — возвращается копия.
+ */
+export function heightToNormalSrc(scene, baseDir) {
+  if (!scene?.nodes?.some((n) => n.props?.heightSrc && !n.props.normalSrc)) return scene;
+  return { ...scene, nodes: scene.nodes.map((n) => {
+    const p = n.props;
+    if (!p?.heightSrc || p.normalSrc) return n;
+    const strength = p.heightStrength ?? 3, key = `${strength}|${p.heightSrc}`;
+    let uri = hnCache.get(key);
+    if (uri === undefined) {
+      uri = null;
+      try {
+        const src = String(p.heightSrc);
+        const buf = readSrc(src, baseDir);
+        const im = decodePNG(buf), m = im.width * im.height, H = new Float32Array(m), A = new Float32Array(m);
+        for (let i = 0; i < m; i++) { const o = i * 4; H[i] = Y601(im.data[o], im.data[o + 1], im.data[o + 2]) / 255; A[i] = im.data[o + 3] / 255; }
+        uri = toDataURI(encodePNG(normalsFromHeight(H, A, im.width, im.height, { strength, blur: 1, yUp: true })), 'image/png');
+      } catch { uri = null; }
+      hnCache.set(key, uri);
+    }
+    return uri ? { ...n, props: { ...p, normalSrc: uri, normalYUp: true } } : n;
+  }) };
 }

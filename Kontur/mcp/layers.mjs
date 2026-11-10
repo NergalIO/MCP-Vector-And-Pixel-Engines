@@ -6,9 +6,10 @@
 // варианты состояний — отдельным слоем на каждый вариант. Режимы наложения остаются у слоя (blend)
 // и переносятся движком-получателем (шейдер/материал).
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { renderSVG, clipRange, pixelOf, quantizeRGBA, collectLights } from '../engine/kontur.js';
-import { svgToPng, mapLimit, PARALLEL } from './render.mjs';
+import { join } from 'node:path';
+import { renderSVG, clipRange, pixelOf, quantizeRGBA, collectLights, typeAnimated, modIsStatic } from '../engine/kontur.js';
+import { svgToPng, svgToRGBA, mapLimit, PARALLEL, isDeferred } from './render.mjs';
+import { posixRel } from './paths.mjs';
 import { decodePNG, encodePNG, sceneNormalMap } from './normals.mjs';
 
 /* ============================== анализ слоёв ============================== */
@@ -19,9 +20,9 @@ export function isAnimated(scene, id, byId, kids, memo = new Map()) {
   const p = n.props || {};
   let a = false;
   if (n.keys && Object.values(n.keys).some((k) => k.length > 1)) a = true;
-  if (n.mods?.some((m) => m.enabled !== false && !(m.type === 'deform' && !m.speed))) a = true;
-  if (n.type === 'blob' && (p.speed ?? 0.5) !== 0) a = true;
-  if (n.type === 'image' && p.sheet) a = true;
+  // модификаторы и типы, меняющиеся сами, — по реестрам движка (как у кэша статичных поддеревьев)
+  if (n.mods?.some((m) => !modIsStatic(m))) a = true;
+  if (n.type !== 'light' && typeAnimated(n)) a = true; // свет уходит в движок отдельно, не слоем
   if (p.inPoint != null || p.outPoint != null) a = true;
   for (const k of ['clip', 'mask']) if (p[k] && byId.has(p[k]) && isAnimated(scene, p[k], byId, kids, memo)) a = true;
   for (const c of kids.get(id) || []) if (isAnimated(scene, c.id, byId, kids, memo)) a = true;
@@ -126,7 +127,7 @@ export async function bakeLayers(scene, dir, opts = {}) {
     for (const v of variants) for (const t of times) jobs.push({ n, t, v });
     return { n, anim, variants };
   });
-  const boxes = await mapLimit(jobs, PARALLEL, async ({ n, t, v }) => alphaBox(decodePNG(await svgToPng(renderSVG(scene, t, { only: [n.id], width: LOW, background: false, states: statesFor(v) }), LOW)), k));
+  const boxes = await mapLimit(jobs, PARALLEL, async ({ n, t, v }) => alphaBox(await svgToRGBA(renderSVG(scene, t, { only: [n.id], width: LOW, background: false, states: statesFor(v) }), LOW), k));
   const bbOf = new Map();
   jobs.forEach((j, i) => bbOf.set(j.n.id, union(bbOf.get(j.n.id) || null, boxes[i])));
   for (const { n, anim, variants } of meta) {
@@ -162,10 +163,15 @@ export async function bakeLayers(scene, dir, opts = {}) {
   const crisp = !!px && !px.aa;
   // запечённый отложенный свет: статичные слои берут цвет из итогового кадра стиля (альфа — своя)
   let litFrame = null;
-  if (opts.lit === 'deferred' && scene.camera3d) {
+  if (isDeferred(opts.lit) && scene.camera3d) {
     const { renderLit } = await import('./lighting.mjs');
     litFrame = (await renderLit(scene, clips[0].start, { width: Math.round(W * scale) })).image;
     log(`${tag}: отложенный свет запечён (${litFrame.width}×${litFrame.height})`);
+  } else if (scene.camera3d && scene.materials && Object.keys(scene.materials).length) {
+    // попиксельные материалы без света: запекаются в альбедо статичных слоёв
+    const { renderLit } = await import('./lighting.mjs');
+    litFrame = (await renderLit(scene, clips[0].start, { width: Math.round(W * scale), bake: 'albedo', baseDir: opts.baseDir })).image;
+    log(`${tag}: материалы запечены в альбедо (${litFrame.width}×${litFrame.height})`);
   }
   const bakeLit = (png, x0, y0) => {
     const img = decodePNG(png), lw = litFrame.width, lh = litFrame.height, kx = lw / W;
@@ -264,7 +270,7 @@ export async function bakeLayers(scene, dir, opts = {}) {
 
 /** Описание слоёв, кадров и клипов (kontur_manifest.json) — для своих конвертеров и проверки. */
 export function layersManifest(scene, dir, b, extra = {}) {
-  const rel = (f) => (f ? relative(dir, f).split(sep).join('/') : null);
+  const rel = (f) => (f ? posixRel(dir, f) : null);
   const manifest = {
     generator: 'kontur', ...extra, size: [b.W, b.H], scale: b.scale,
     clips: b.clips.map((c) => ({ name: c.name, start: c.start, end: c.end, loop: c.loop, fps: b.fpsOf(c), next: c.next })),

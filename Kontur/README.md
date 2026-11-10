@@ -9,17 +9,28 @@
 
 ```
 kontur/
-  engine/kontur.js      — ядро (ES-модуль, браузер + Node)
-  mcp/server.mjs        — MCP-сервер (stdio) + живое превью по HTTP
+  engine/kontur.js      — ядро: точка входа (ES-модуль, браузер + Node), реэкспорт engine/core/*
+  engine/core/          — модули ядра: типы узлов (types.js), вычисление кадра, геометрия, краски, модификаторы,
+                          схема и миграции (schema.js), IR и Canvas-рендерер, импорт SVG, экспорт в Lottie
+  engine/world3d.js     — 2.5D-мир (только Node/MCP): реэкспорт engine/world/*
+  engine/world/         — модули мира: цвет, ГСЧ и подсиды, камера, построитель, материалы, формы, фасады,
+                          перевод в узлы со слиянием деталей (emit.js), реестр предметов со схемой (items.js)
+  mcp/server.mjs        — MCP-сервер: только сборка частей (store, http, rpc, tools/)
+  mcp/store.mjs         — состояние сцены: загрузка, транзакции, история (дельты), атомарная запись
+  mcp/http.mjs          — живое превью и API студии (токен, патчи, общая история)
+  mcp/rpc.mjs           — JSON-RPC по stdio; mcp/tools/*.mjs — инструменты по группам
   mcp/render.mjs        — PNG-кадры, раскадровки, экспорт видео/GIF/HTML
   mcp/layers.mjs        — раскладка сцены на запечённые PNG-слои (общая для Godot и Unity)
   mcp/godot.mjs         — экспорт в Godot 4; mcp/unity.mjs, unity_common.mjs, unity/ — экспорт в Unity
   player/index.html     — Kontur Studio: редактор (рисование, слои, инспектор, таймлайн, состояния, кости)
   player/ed/*.js        — модули редактора (ES-модули, без сборки)
-  docs/REFERENCE.md     — справочник формата (его же получает агент через инструмент docs)
+  docs/REFERENCE.md     — справочник формата (его же получает агент через инструмент docs);
+                          таблицы типов и модификаторов генерирует npm run docs из реестров
+  docs/scene.schema.json — JSON Schema сцены (тоже из реестров)
   examples/*.json       — демо: bay (ремонтный отсек: растр + дизеринг), flow, liquid, reveal
   examples/assets/      — растровые ассеты демо (фактура, спрайт-лист)
-  scripts/              — CLI-рендер, сборка автономной страницы, тесты
+  scripts/              — CLI-рендер, сборка автономной страницы, генерация справки
+  test/                 — тесты (node:test), эталоны кадров (golden.json), замеры (bench.mjs)
 ```
 
 ## Подключение MCP
@@ -45,7 +56,21 @@ claude mcp add kontur -- node /путь/к/kontur/mcp/server.mjs
 После запуска откройте **http://127.0.0.1:7788/** — это редактор Kontur Studio. Он обновляется на каждое
 изменение, которое делает агент, а ваши правки мышью сразу сохраняются и видны агенту (см. «Редактор» ниже).
 
-Переменные: `KONTUR_SCENE` (файл сцены, автосохранение), `KONTUR_PORT` (0 — без превью), `KONTUR_HOST`.
+Переменные: `KONTUR_SCENE` (файл сцены, автосохранение), `KONTUR_PORT` (0 — без превью), `KONTUR_HOST`,
+`KONTUR_TOKEN` (токен API превью; по умолчанию случайный), `KONTUR_TRUST_EXPR=1` (полный JavaScript в `expr`),
+`KONTUR_THREADS` (потоков отложенного света вместе с главным; по умолчанию — по числу ядер, не больше 16; `1` — без пула),
+`KONTUR_GPU` (этапы отложенного света на видеокарте через WebGPU: `1` / `on` / `all` — все перенесённые, список
+`filters,ao,gi,sun,shade,lamps,materials,post,paint` — только они, `0` или пусто — выкл., по умолчанию). Нужен
+необязательный пакет `webgpu`; нет пакета, адаптера или задание упало — этап считается на процессоре, причина — в
+`stats.gpuError`. Видеокарта считает во float32, поэтому кадр отличается от процессорного на единицы уровней у редких
+пикселей; эталонные тесты — без неё. На процессоре остаются проходы SVG, картиночные фактуры (`tex.src`), LUT в `grade`,
+глубина резкости и лучи теней ламп. Шейдеры собираются один раз на процесс: первый кадр медленнее остальных.
+
+**Безопасность превью.** API (сцена, правки, ассеты, открытие файлов) требует токен: студия получает его
+cookie (HttpOnly, SameSite=Strict) при открытии страницы, другие клиенты передают заголовок `x-kontur-token`.
+Запросы с чужим `Host` (DNS rebinding) и изменяющие запросы с чужим `Origin` отклоняются; `/asset` отдаёт
+только картинки из папки сцены, `/open` — только сцены из папки сцены и `examples/`. Запись атомарная
+(временный файл + переименование, прежняя версия — в `.bak`); несчитываемая сцена открывается только для чтения.
 Только превью без MCP-клиента: `node mcp/server.mjs --preview --scene examples/flow.json`.
 
 ### Инструменты сервера
@@ -53,19 +78,22 @@ claude mcp add kontur -- node /путь/к/kontur/mcp/server.mjs
 |---|---|
 | Сцена | `scene_info`, `docs`, `scene_new`, `scene_settings`, `scene_get_json`, `scene_set_json`, `scene_open`, `scene_save_as` |
 | Узлы | `node_add`, `nodes_add_batch`, `node_update`, `node_remove`, `node_duplicate`, `node_reorder` |
+| Символы | `symbol_define`, `symbol_remove` и узлы `instance` — переиспользуемые наборы узлов со своим временем |
+| Маркеры | `marker_set`, `marker_remove` — события на шкале (`player.onMarker`, маркеры Lottie) |
+| Импорт | `svg_import` — SVG-файл или текст в узлы (фигуры, пути, текст, градиенты, `<use>`, CSS) |
 | Растр и стиль | `image_add` (растровые слои, спрайт-листы), `dither_set` (дизеринг теней) |
 | Клипы | `clip_set`, `clip_remove` — именованные отрезки шкалы (idle, walk, talk) |
 | Состояния | `state_set`, `state_remove` — варианты объектов (дверь открыта/закрыта) |
 | Скелет | `bone_mark`, `ik_set` — кости и двухзвенный IK с целью |
 | Пиксели и свет | `pixel_set` (пиксельный режим), `scene_settings` с `ambient`, узлы `light` |
 | Правки | `edits_info`, `edits_reset` — ручные правки поверх сцены из скрипта |
-| 2.5D и отложенный свет | `camera3d_set`, `world_build`, `material_apply`, `surface_set`, `lighting_set`, `style_set`, `render_passes`, `render_frame` с `lit: "deferred"` — солнце с тенями, AO, фонари, блики, туман, bloom, стили (комикс, штриховка, мазки, пиксели) |
+| 2.5D и отложенный свет | `camera3d_set`, `world_build`, `world_item`, `material_apply`, `surface_set`, `lighting_set`, `style_set`, `render_passes`, `render_frame` с `lit: "deferred"` — солнце с тенями, AO, фонари, блики, туман, bloom, стили (комикс, штриховка, мазки, пиксели) |
 | Нормали | `normal_map_generate` — карты нормалей для сцены, узлов или файла с превью освещения |
 | Godot, Unity | `compat_check`, `export` с `format: "godot"` или `"unity"` (запекание эффектов, анимация по клипам, свет, нормали) |
 | Анимация | `keys_set`, `keys_set_many`, `key_add`, `keys_clear`, `animate`, `preset_apply` |
 | Процедурное | `mod_add`, `mod_remove` |
 | Проверка | `render_frame` (`states`, `lit` — со светом, `pixel`), `render_contact_sheet` — агент **видит** кадры и раскадровку |
-| Вывод | `export` (html, svg, json, mp4, webm, gif), `preview_url`, `undo`, `redo` |
+| Вывод | `export` (html, svg, json, png, mp4, webm, gif, lottie), `preview_url`, `undo`, `redo` |
 
 Все изменения транзакционны: если правка ломает сцену, она откатывается и агент получает текст ошибки.
 
@@ -88,7 +116,10 @@ claude mcp add kontur -- node /путь/к/kontur/mcp/server.mjs
   (любая правка ставит ключ).
 - **Вкладка «Сцена»:** размер и длительность, состояния (● — запись: правки идут в вариант), клипы, пиксельный режим,
   свет, дизеринг, файл правок. Кнопки «Пиксели» и «Свет» под холстом показывают кадр так, как он будет в игре; «Отложенный свет» — кадр 2.5D-сцены со светом и стилем (считает сервер).
-- **История:** Ctrl+Z / Ctrl+Shift+Z, общая с агентом: правки агента приходят на холст сразу и тоже отменяются.
+- **История:** Ctrl+Z / Ctrl+Shift+Z, общая с агентом: история одна, на сервере. Правка из студии уходит патчем
+  (`POST /patch`, формат `diffScenes`), а не всей сценой; правки агента приходят на холст сразу и тоже отменяются.
+- **Отрисовка:** кнопка «Canvas» под холстом переключает SVG-DOM и Canvas 2D (выбор запоминается; `?renderer=canvas`).
+  Маски, узорные заливки и текст по кривой Canvas рисует через SVG-картинку.
 
 Клавиши: V выбор, A точки, P перо, N карандаш, R O U S L — фигуры, T текст, I картинка, K кость, J свет, H рука;
 Ctrl+C/X/V/D, Ctrl+G / Ctrl+Shift+G, Ctrl+[ ] — порядок, стрелки — сдвиг (Shift ×10), «,» «.» — кадр, Delete, Esc.
@@ -133,15 +164,36 @@ new Player(document.querySelector('#stage'), s);   // в браузере
 const svg = renderSVG(s, 1.2);                      // любой кадр строкой SVG
 ```
 
-Формат сцены, все свойства, кривые и модификаторы — в [docs/REFERENCE.md](docs/REFERENCE.md).
+Символы, маркеры, импорт и экспорт:
+```js
+import { ops, insertSVG, exportLottie, CanvasRenderer } from './engine/kontur.js';
+
+ops.defineSymbol(s, 'spark', { duration: 1, nodes: [{ id: 'p', type: 'star', props: { fill: '#ffd060' }, keys: { rotation: [[0, 0], [1, 72]] } }] });
+for (let i = 0; i < 5; i++) ops.addNode(s, { type: 'instance', props: { symbol: 'spark', x: 100 + i * 120, y: 700, timeOffset: i * 0.2 } });
+ops.addNode(s, { id: 'title', type: 'text', props: { text: 'По дуге', path: 'M100 300 Q400 50 700 300', fontSize: 40 } });
+ops.setMarker(s, 'boom', 1.5, { strength: 2 });
+
+insertSVG(s, svgText, { fit: [400, 400], x: 200, y: 200 });         // SVG → узлы
+const { lottie, warnings } = exportLottie(s, { fps: 30 });          // → Lottie JSON
+const player = new Player(el, s, { renderer: new CanvasRenderer(el) });
+player.onMarker((m) => console.log(m.name, m.data));
+```
+
+Формат сцены, все свойства, кривые и модификаторы — в [docs/REFERENCE.md](docs/REFERENCE.md); JSON Schema —
+[docs/scene.schema.json](docs/scene.schema.json). Новые типы узлов, модификаторы и режимы рендера регистрируются
+в реестрах (`registerNodeType`, `registerModifier`, `registerRenderMode`, для 2.5D — `registerWorldItem`);
+справка и схема строятся из них (`npm run docs`).
 
 ## Проверка
+Наборы: `engine` (ядро), `golden` (эталоны), `renderers` (ключевой DOM, Canvas, IR), `schema`, `store`
+(транзакции, история, атомарная запись), `mcp` (протокол, инструменты, безопасность превью, патчи), `edits`,
+`editor`, `phase4` (символы, маркеры, текст по кривой, импорт SVG, Lottie). CI — `.github/workflows/kontur.yml` в корне репозитория.
 ```bash
-npm test                          # все проверки ниже
-node scripts/test-engine.mjs      # ядро: геометрия, IK, состояния, свет, пиксели, правки
-node scripts/test-mcp.mjs         # сквозной тест протокола и инструментов
-node scripts/test-edits.mjs       # файл правок, HTTP редактора, загрузка картинок
-node scripts/test-editor.mjs      # модули редактора и автономная сборка
+npm test                          # все наборы test/*.test.mjs (node test/run.mjs [фильтр])
+npm run test:golden               # кадры примеров против эталонных хэшей (test/golden.json)
+npm run golden:update             # обновить эталоны после намеренного изменения рендера
+npm run bench                     # замеры: вычисление кадра, addNode, морфинг (test/bench.json)
+npm run docs:check                # справка и схема совпадают с реестрами
 node examples/build-demos.mjs     # пересобрать демо через API
 ```
 
@@ -170,8 +222,11 @@ node examples/build-demos.mjs     # пересобрать демо через A
 Узлы могут нести 3D-поверхность (`props.surface`: плоскость, нормаль, блик, свечение), сцена — камеру `camera3d`,
 свет `lighting` и стиль `style`. Из проходов SVG (цвет, нормали, плоскость, d, свечение, контур, маски) рендер
 восстанавливает позицию каждого пикселя и считает свет как в 3D: солнце с тенями лучами по окклюдерам, небо,
-AO, фонари с тенями, блики, туман, bloom, ACES, затем стиль. `world_build` собирает окружение (дома, кладка,
-мостовая, окна, фонари) из 3D-описания, `material_apply` кладёт материал на свою грань. Пресеты: `day`, `comic`,
+AO, фонари с тенями, блики, туман, bloom, ACES, затем стиль. `world_build` собирает окружение (дома с разными
+крышами, кладка, мостовая, дороги, арки, фонтаны, маркизы, ряды и россыпи копий) из 3D-описания: каждый предмет
+проверяется по схеме, детали одной грани сливаются в составные пути (`merge`), мелочи отбрасываются по экранному
+размеру (`lod`), раскладка не зависит от камеры, `world_item` правит один предмет без смены остальных.
+`material_apply` кладёт материал на свою грань. Пресеты: `day`, `comic`,
 `night`, `pixel`. Кадр 2560×1080 — около 10 с. Экспорт в Unity/Godot: запечённый кадр (`lit: "deferred"`) или
 альбедо + нормали + Light2D. Подробно — в справочнике, раздел «2.5D: отложенный свет».
 
@@ -180,7 +235,15 @@ AO, фонари с тенями, блики, туман, bloom, ACES, зате�
   с сотнями размытых слоёв лучше упрощать или экспортировать в видео.
 - Отложенный свет считается на процессоре (Node), не в реальном времени: для игры кадр запекается
   или переносится картами нормалей в 2D-свет движка; тени лучами — только от окклюдеров `props.occluder`.
-- Модификатор `expr` исполняет JS-код — это локальный инструмент, не открывайте превью-порт наружу.
+- Модификатор `expr` по умолчанию разбирает безопасное подмножество выражений (арифметика, функции движка,
+  без доступа к глобальным объектам); полный JavaScript — в браузере и в Node при `KONTUR_TRUST_EXPR=1`.
+  Превью рассчитано на локальную работу: не открывайте порт наружу без своего `KONTUR_TOKEN`.
+- Lottie: кадры сэмплируются (fps экспорта), а не переводятся в твины; текст, растр, маски и обрезка, фильтры,
+  режимы наложения и дизеринг не переносятся (экспорт сообщает об этом). Органические формы (`blob`, `deform`)
+  дают много ключей формы — регулируйте `tolerance` и fps.
+- Импорт SVG не переносит clip-path, mask, filter, pattern, marker и SMIL; многострочный текст собирается в строку.
+- Символы: состояния, выбор подмножества и IK основной сцены внутрь экземпляра не проходят; пружины внутри
+  символа общие для всех его экземпляров.
 - Текст не морфится (меняется целиком, есть `textReveal` для печати).
 - Растр дизеринга привязан к локальным координатам узла: при вращении узла поворачивается и растр.
 - Экспорт в Godot и Unity переносит анимацию кадрами (PNG), а не твинами: точность по времени — fps клипа.

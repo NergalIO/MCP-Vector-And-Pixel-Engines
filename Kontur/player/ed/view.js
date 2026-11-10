@@ -6,7 +6,8 @@ export const stage = $('stage'), canvasBox = $('canvas'), ovSvg = $('ov');
 let fitted = false, pan = null, space = { down: false, used: false };
 
 export function initView() {
-  E.player = new K.Player(canvasBox, E.scene, { autoplay: false, states: E.states });
+  E.canvasRender = E.canvasRender ?? (/[?&]renderer=canvas/.test(location.search) || readPref('kontur.renderer') === 'canvas');
+  E.player = new K.Player(canvasBox, E.scene, { autoplay: false, states: E.states, renderer: makeRenderer() });
   E.player.on((t) => { E.t = t; emit('frame'); });
   new ResizeObserver(() => (fitted ? layout() : fit())).observe(stage);
   stage.addEventListener('pointerdown', onDown);
@@ -17,6 +18,32 @@ export function initView() {
   stage.addEventListener('contextmenu', (e) => e.preventDefault());
   stage.addEventListener('wheel', onWheel, { passive: false });
   stage.addEventListener('pointerleave', () => { if (E.hover) { E.hover = null; emit('overlay'); } });
+}
+
+const readPref = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+/** Рендерер кадра: SVG в DOM (по умолчанию) или Canvas 2D. */
+/**
+ * Canvas в редакторе: картинку рисует CanvasRenderer, а под ним — невидимый SVG того же кадра (opacity 0):
+ * по нему работают попадание мышью (elementsFromPoint), рамки выделения (getBBox) и ручки — как в режиме SVG.
+ */
+class EditorCanvasRenderer {
+  constructor(box) {
+    this.canvas = new K.CanvasRenderer(box);
+    this.hit = document.createElement('div');
+    Object.assign(this.hit.style, { position: 'absolute', inset: '0', opacity: '0' });
+    box.appendChild(this.hit);
+    this.dom = new K.DOMRenderer(this.hit);
+  }
+  get stats() { return this.canvas.stats; }
+  render(tree, player) { this.canvas.render(tree, player); this.dom.render(tree); }
+}
+export function makeRenderer() { return E.canvasRender ? new EditorCanvasRenderer(canvasBox) : new K.DOMRenderer(canvasBox); }
+/** Переключить бэкенд на лету (кнопка «Canvas»). */
+export function setRenderer(canvas) {
+  E.canvasRender = !!canvas;
+  try { localStorage.setItem('kontur.renderer', canvas ? 'canvas' : 'svg'); } catch {}
+  E.player.renderer = makeRenderer();
+  E.player.draw();
 }
 
 /* ---------- масштаб и панорама ---------- */

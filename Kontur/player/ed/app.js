@@ -1,6 +1,6 @@
 // Запуск редактора: источники сцен, живая связь с MCP-сервером, панель инструментов, вкладки, клавиши, перетаскивание файлов.
 import { K, E, on, emit, node, kidsOf, isLocked, isHidden, edit, undo, redo, canUndo, canRedo, select, toast, loadInto, remoteReplace, clearHistory, busy, pushing, esc, topSel } from './core.js';
-import { initView, fit, layout, zoomAt, zoomTo, spaceKey, stage, toScene, stagePt } from './view.js';
+import { initView, fit, layout, zoomAt, zoomTo, spaceKey, stage, toScene, stagePt, setRenderer } from './view.js';
 import './overlay.js';
 import { TOOLS, setTool, nudge, deleteAnchors, finishPen, addImageFile } from './tools.js';
 import { deleteSel, copySel, cutSel, paste, duplicateSel, groupSel, ungroupSel, restack } from './actions.js';
@@ -55,6 +55,7 @@ toggleBtn('v-deferred', 'deferredPreview', () => {
   emit('previewmode');
 });
 on('previewmode', () => { $('v-pixel').classList.toggle('on', E.pixelPreview); $('v-light').classList.toggle('on', E.lightPreview); $('v-deferred').classList.toggle('on', !!E.deferredPreview); schedulePreview(); });
+{ const b = $('v-canvas'); const sync = () => b.classList.toggle('on', !!E.canvasRender); b.onclick = () => { setRenderer(!E.canvasRender); sync(); }; sync(); }
 $('v-fit').onclick = fit;
 $('zoom').ondblclick = () => zoomTo(1);
 on('view-reset', () => { layout(); });
@@ -83,7 +84,7 @@ $('json').onkeydown = (e) => e.stopPropagation();
 
 /* ---------- шапка: история, правки, связь ---------- */
 $('undo').onclick = undo; $('redo').onclick = redo;
-on('scene sel', () => { $('undo').disabled = !canUndo(); $('redo').disabled = !canRedo(); });
+on('scene sel pushed live', () => { $('undo').disabled = !canUndo(); $('redo').disabled = !canRedo(); });
 on('live pushed', () => {
   const el = $('live');
   el.classList.toggle('on', E.live && E.source === '__live');
@@ -204,7 +205,7 @@ function openLocal(s, source, name) {
   if (source === 'file') { if (![...$('pick').options].some((o) => o.value === '__file')) $('pick').append(new Option('Файл: ' + name, '__file')); $('pick').value = '__file'; }
 }
 function applyLive(d, fresh) {
-  E.rev = d.rev; E.path = d.path || null; E.edits = d.edits || null;
+  E.rev = d.rev; E.path = d.path || null; E.edits = d.edits || null; E.history = d.history; E.synced = structuredClone(d.scene);
   if (fresh) { E.source = '__live'; clearHistory(); E.sel = []; E.scope = null; E.record = null; for (const k of Object.keys(E.states)) delete E.states[k]; loadInto(d.scene, { keepTime: false }); emit('replace'); fit(); syncClips(); }
   else remoteReplace(d.scene);
   emit('live');

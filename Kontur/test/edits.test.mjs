@@ -1,12 +1,11 @@
 // Сквозной тест режима правок и новых инструментов MCP-сервера:
 // сцена из «скрипта» (*.kontur.json рядом с *.build.mjs) → правки в *.edits.json → пересборка → правки на месте.
-// node scripts/test-edits.mjs
-import { spawn } from 'node:child_process';
+// node test/edits.test.mjs
 import { writeFileSync, readFileSync, mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { encodePNG } from '../mcp/normals.mjs';
+import { startServer, txt, check, checks } from './helpers/mcp-child.mjs';
 
 const dir = mkdtempSync(join(tmpdir(), 'kontur-edits-'));
 const sceneFile = join(dir, 'room.kontur.json'), editsFile = join(dir, 'room.edits.json');
@@ -29,35 +28,15 @@ const build = (variant) => {
 build(1);
 writeFileSync(join(dir, 'room.build.mjs'), '// признак: сцену пишет скрипт\n');
 
-const srv = spawn(process.execPath, [fileURLToPath(new URL('../mcp/server.mjs', import.meta.url))], {
-  env: { ...process.env, KONTUR_SCENE: sceneFile, KONTUR_PORT: String(PORT) }, stdio: ['pipe', 'pipe', 'pipe'],
-});
-let buf = '', id = 0;
-const pending = new Map();
-srv.stdout.on('data', (d) => {
-  buf += d;
-  let i;
-  while ((i = buf.indexOf('\n')) >= 0) { const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1); pending.get(m.id)?.(m); pending.delete(m.id); }
-});
-let stderr = '';
-srv.stderr.on('data', (d) => (stderr += d));
-const rpc = (method, params) => new Promise((res) => { const i = ++id; pending.set(i, res); srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: i, method, params }) + '\n'); });
-const call = async (name, args = {}) => {
-  const r = await rpc('tools/call', { name, arguments: args });
-  if (r.error || r.result.isError) throw new Error(`${name}: ${JSON.stringify(r.error || r.result.content[0].text)}`);
-  return r.result;
-};
-const txt = (r) => r.content.find((c) => c.type === 'text')?.text || '';
+const { srv, rpc, call, notify, stderr } = startServer({ env: { KONTUR_SCENE: sceneFile, KONTUR_PORT: String(PORT), KONTUR_TOKEN: 'edits-' + PORT }, failOnExit: false });
 const sceneNow = async () => JSON.parse(txt(await call('scene_get_json')));
 const node = (s, nid) => s.nodes.find((n) => n.id === nid);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const http = async (path, init) => { const r = await fetch(`http://127.0.0.1:${PORT}${path}`, init); if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`); return r; };
-let ok = 0;
-const check = (cond, msg) => { if (!cond) throw new Error('ПРОВАЛ: ' + msg); ok++; console.log('✓', msg); };
+const http = async (path, init) => { const r = await fetch(`http://127.0.0.1:${PORT}${path}`, { ...init, headers: { ...(init?.headers || {}), 'x-kontur-token': 'edits-' + PORT } }); if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`); return r; };
 
 try {
   await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
-  srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+  notify('notifications/initialized');
   const before = readFileSync(sceneFile, 'utf8');
 
   check(/Правки: .*room\.edits\.json/.test(txt(await call('scene_info'))), 'build.mjs рядом → сцена открыта в режиме правок');
@@ -121,10 +100,10 @@ try {
   // явный режим без правок
   await call('scene_open', { path: sceneFile, edits: false });
   check(!/Правки:/.test(txt(await call('scene_info'))), 'scene_open edits:false — без файла правок');
-  console.log(`\nВсе проверки пройдены: ${ok}`);
+  console.log(`\nВсе проверки пройдены: ${checks()}`);
 } catch (e) {
   console.error(e.message);
-  console.error(stderr.split('\n').slice(-15).join('\n'));
+  console.error(stderr().split('\n').slice(-15).join('\n'));
   process.exitCode = 1;
 } finally {
   srv.kill();

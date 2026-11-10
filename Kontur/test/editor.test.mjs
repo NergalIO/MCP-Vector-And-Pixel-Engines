@@ -1,6 +1,6 @@
 // Проверка редактора без браузера: импорты между модулями player/ed/*.js сходятся с экспортами,
 // автономная сборка (build-artifact) собирается и разбирается как JS-модуль.
-// node scripts/test-editor.mjs
+// node test/editor.test.mjs
 import { readFileSync, readdirSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
