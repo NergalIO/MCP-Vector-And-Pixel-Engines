@@ -36,7 +36,54 @@ export function house(S, x0, x1, z0, z1, h, o = {}) {
   if (o.plinth) box(S, x0 - 0.06, x1 + 0.06, y0, y0 + o.plinth, z0 - 0.06, z1 + 0.06, C.stone, { key: key + 0.003, name: 'plinth', mats: { all: ['stone', C.stone, { bh: 0.38 }] }, occ: false });
   box(S, x0, x1, y0, y1, z0, z1, c, { key: key + 0.002, name: 'house', mats: m ? { all: m, top: null } : {}, decor, sides: o.sides });
   const prims = [], tris = [];
-  const roofFace = (ps, fr) => face(S, ps, roofCol, { center: [(x0 + x1) / 2, y1 - 1, (z0 + z1) / 2], mat: 'tile', matCol: roofCol, frame: fr, spec: 0.2 });
+  const tiles = o.tiles || 'tile', ctr = [(x0 + x1) / 2, y1 - 1, (z0 + z1) / 2];
+  const roofFace = (ps, fr) => face(S, ps, roofCol, { center: ctr, mat: tiles, matCol: roofCol, matOpt: o.tileW ? { tw: o.tileW } : {}, frame: fr, spec: 0.2 });
+  // eave — объёмный свес: подшивка снизу и карниз по верху стены (до ската), торец ската с устьями черепиц и
+  // фронтоны-кромки (после ската); толщина ската et
+  const et = 0.16, cor = o.cornice || '#efe2d0', quad = (ps, cc, so = {}) => prims.push(...face(S, ps, cc, { center: ctr, occ: false, ...so }));
+  const eaveUnder = (ex0, ex1, ez, ye) => {
+    if (!o.eave) return;
+    quad([[x0 - 0.07, ye - et - 0.18, z0 - 0.08], [x1 + 0.07, ye - et - 0.18, z0 - 0.08], [x1 + 0.07, ye - et, z0 - 0.08], [x0 - 0.07, ye - et, z0 - 0.08]], cor, { spec: 0.15 });
+    quad([[x0 - 0.07, ye - et - 0.18, z0 - 0.08], [x1 + 0.07, ye - et - 0.18, z0 - 0.08], [x1 + 0.07, ye - et - 0.18, z0], [x0 - 0.07, ye - et - 0.18, z0]], dark(cor, 0.2));
+    quad([[ex0, ye - et, ez], [ex1, ye - et, ez], [ex1, ye - et, z0], [ex0, ye - et, z0]], dark(cor, 0.1));
+  };
+  const eaveEdge = (ex0, ex1, ez, ye) => {
+    if (!o.eave) return;
+    const fr = S.frame([ex0, ye - et, ez], [1, 0, 0], [0, 1, 0], ex1 - ex0, et, [0, 0, -1]);
+    quad([[ex0, ye - et, ez], [ex1, ye - et, ez], [ex1, ye, ez], [ex0, ye, ez]], dark(roofCol, 0.12), {
+      // устья канальной черепицы: тёмные полукруглые проёмы под каждой крышкой (шаг — как у материала barrel)
+      decor: () => {
+        if (tiles !== 'barrel' || !S.faces([0, 0, -1], [(ex0 + ex1) / 2, ye, ez])) return [];
+        const tw = o.tileW || 0.24, cw = tw * 0.64, L = ex1 - ex0, out = [];
+        for (let a = (L % tw) / 2 - tw; a < L; a += tw) {
+          const c = a + cw / 2, r = cw * 0.4, pts = [];
+          if (c - r < 0 || c + r > L) continue;
+          for (let k = 0; k <= 8; k++) { const t = Math.PI * (k / 8); pts.push(fr.at(c - Math.cos(t) * r, 0.02 + Math.sin(t) * r * 0.9)); }
+          out.push(S.det(fr, pts, dark(roofCol, 0.6)));
+        }
+        return out;
+      },
+    });
+  };
+  /** Кромка ската у фронтона X = xe (стена — xw): under — подшивка свеса над фронтоном (до ската), иначе торец толщиной et. */
+  const verge = (xe, xw, ez, ye, zr, yr, ez1, under) => {
+    if (!o.eave) return;
+    for (const [za, ya, zb, yb] of [[ez, ye, zr, yr], [zr, yr, ez1, ye]]) {
+      if (under) quad([[xw, ya - et, za], [xe, ya - et, za], [xe, yb - et, zb], [xw, yb - et, zb]], dark(cor, 0.1));
+      else quad([[xe, ya - et, za], [xe, yb - et, zb], [xe, yb, zb], [xe, ya, za]], dark(roofCol, 0.12));
+    }
+  };
+  /** Коньковая черепица: валик вдоль конька с поперечными стыками. */
+  const ridgeCap = (ex0, ex1, zr, yr) => {
+    if (!o.eave) return;
+    const ps = [[ex0, yr - 0.07, zr - 0.14], [ex1, yr - 0.07, zr - 0.14], [ex1, yr + 0.09, zr], [ex0, yr + 0.09, zr]];
+    const rc = dark(roofCol, 0.06);
+    quad(ps, rc, { spec: 0.3, decor: (n) => {
+      const fr = frameOf(S, ps, n), out = [];
+      for (let a = 0.38; a < fr.w; a += 0.38) out.push(S.det(fr, fr.rect(a - 0.025, 0, 0.05, fr.h), dark(rc, 0.35), { n: fr.tilt(1, 0, 0.7) }));
+      return out;
+    } });
+  };
   if (o.ridge === 'z') {
     const xm = (x0 + x1) / 2, yr = y1 + rh, L = z1 - z0 + 2 * ov, sl = Math.hypot(xm - x0 + ov, rh);
     prims.push(...face(S, [[x0, y1, z0], [x1, y1, z0], [xm, yr, z0]], c, { center: [xm, y1, (z0 + z1) / 2] }));
@@ -74,16 +121,42 @@ export function house(S, x0, x1, z0, z1, h, o = {}) {
     const zm = (z0 + z1) / 2, yr = y1 + rh, L = x1 - x0 + 2 * ov, sl = Math.hypot(zm - z0 + ov, rh);
     prims.push(...face(S, [[x0, y1, z0], [x0, y1, z1], [x0, yr, zm]], c, { center: [(x0 + x1) / 2, y1, zm] }));
     prims.push(...face(S, [[x1, y1, z0], [x1, y1, z1], [x1, yr, zm]], c, { center: [(x0 + x1) / 2, y1, zm] }));
+    eaveUnder(x0 - ov, x1 + ov, z0 - ov, y1 - 0.12);
+    verge(x0 - ov, x0, z0 - ov, y1 - 0.12, zm, yr, z1 + ov, true);
+    verge(x1 + ov, x1, z0 - ov, y1 - 0.12, zm, yr, z1 + ov, true);
     prims.push(...roofFace([[x0 - ov, y1 - 0.12, z0 - ov], [x1 + ov, y1 - 0.12, z0 - ov], [x1 + ov, yr, zm], [x0 - ov, yr, zm]], (n) => S.frame([x0 - ov, y1 - 0.12, z0 - ov], [1, 0, 0], norm([0, rh + 0.12, zm - z0 + ov]), L, sl, n)));
+    eaveEdge(x0 - ov, x1 + ov, z0 - ov, y1 - 0.12);
+    verge(x0 - ov, x0, z0 - ov, y1 - 0.12, zm, yr, z1 + ov);
+    verge(x1 + ov, x1, z0 - ov, y1 - 0.12, zm, yr, z1 + ov);
+    ridgeCap(x0 - ov, x1 + ov, zm, yr);
     tris.push([[x0 - ov, y1, z0 - ov], [x1 + ov, y1, z0 - ov], [x1 + ov, yr, zm]], [[x0 - ov, y1, z0 - ov], [x1 + ov, yr, zm], [x0 - ov, yr, zm]], [[x0 - ov, y1, z1 + ov], [x1 + ov, y1, z1 + ov], [x1 + ov, yr, zm]], [[x0 - ov, y1, z1 + ov], [x1 + ov, yr, zm], [x0 - ov, yr, zm]]);
   }
-  const it = S.item(key + 0.001, prims, { name: 'roof', force: tris.length > 0 });
+  const it = S.item(key + 0.001, prims, { name: 'roof', force: tris.length > 0, pmat: o.roofPmat });
   for (const t of tris) S.tri3(t, it);
   if (o.chimney) {
     const cxp = x0 + (x1 - x0) * o.chimney, cz = (z0 + z1) / 2;
     box(S, cxp - 0.3, cxp + 0.3, y1, y1 + rh + 1.0, cz - 0.3, cz + 0.3, C.brick, { key, name: 'chimney', mats: { all: ['brick', C.brick] } });
     box(S, cxp - 0.38, cxp + 0.38, y1 + rh + 1.0, y1 + rh + 1.2, cz - 0.38, cz + 0.38, C.stoneSh, { key: key - 0.001, name: 'chimney' });
   }
+}
+/**
+ * Приоткрытая ставня: петли на кромке ha грани fr (у окна), створка шириной ws уходит в сторону side (±1 по fr.u) и
+ * отходит от стены на угол ang — дальняя кромка выступает на ws·sin(ang). Створка — грань (тень на стену при autoOcc),
+ * ламели и рамка — на её рамке, у дальней кромки — торец.
+ */
+export function ajarShutter(S, fr, ha, b, ws, hh, side, ang, c, sw) {
+  const cs = Math.cos(ang), sn = Math.sin(ang), o = fr.at(ha, b);
+  const u = add(mul(fr.u, side * cs), mul(fr.n, sn)), v = fr.v, ps = [o, add(o, mul(u, ws)), add(add(o, mul(u, ws)), mul(v, hh)), add(o, mul(v, hh))];
+  let n = norm(add(mul(fr.n, cs), mul(fr.u, -side * sn)));
+  const mid = add(o, add(mul(u, ws / 2), mul(v, hh / 2)));
+  if (!S.faces(n, mid)) n = mul(n, -1);
+  const out = face(S, ps, c, { ink: true, sw, spec: 0.15 });
+  const pf = S.frame(o, u, v, ws, hh, n);
+  out.push(S.det(pf, pf.rect(0.04, 0.04, ws - 0.08, hh - 0.08), dark(c, 0.12), { bump: true }));
+  for (let k = 1; k < 6; k++) out.push(S.det(pf, pf.rect(0.05, (hh * k) / 6 - 0.02, ws - 0.1, 0.04), dark(c, 0.3), { n: pf.tilt(0, -1, 0.8) }));
+  const e0 = ps[1], e1 = ps[2];
+  out.push(S.line(e0, e1, dark(c, 0.5), Math.max(1, 0.035 * S.pxPerUnit(e0[2]))));
+  return out;
 }
 /** Окно: наличник, откос, стекло (блик/свечение и свет), переплёт, подоконник, ставни, ящик с цветами. */
 export function windowPrims(S, fr, a, b, w, h, o = {}) {
@@ -99,7 +172,8 @@ export function windowPrims(S, fr, a, b, w, h, o = {}) {
   out.push(S.det(fr, fr.rect(a, b + h * 0.55, w, 0.05), C.cream, { bump: true }));
   out.push(S.det(fr, fr.rect(a - 0.16, b - 0.16, w + 0.32, 0.08), C.stoneHi, { n: fr.tilt(0, 1, 1.2), ink: true, sw }));
   out.push(S.det(fr, fr.rect(a - 0.16, b - 0.22, w + 0.32, 0.06), C.stoneSh, { n: fr.tilt(0, -1, 0.8) }));
-  if (o.shut) for (const sa of [a - w * 0.46 - 0.12, a + w + 0.12]) {
+  if (o.shut) for (const [sa, side] of [[a - w * 0.46 - 0.12, -1], [a + w + 0.12, 1]]) {
+    if (o.ajar) { out.push(...ajarShutter(S, fr, side < 0 ? sa + w * 0.46 : sa, b - 0.05, w * 0.46, h + 0.1, side, o.ajar, o.shut, sw)); continue; }
     out.push(S.det(fr, fr.rect(sa, b - 0.05, w * 0.46, h + 0.1), o.shut, { ink: true, sw, bump: true }));
     for (let k = 1; k < 6; k++) out.push(S.det(fr, fr.rect(sa + 0.03, b + ((h + 0.1) * k) / 6 - 0.02, w * 0.46 - 0.06, 0.04), dark(o.shut, 0.3), { n: fr.tilt(0, -1, 0.8) }));
   }

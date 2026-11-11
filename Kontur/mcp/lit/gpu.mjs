@@ -1,6 +1,7 @@
 // Видеокарта для отложенного света (WebGPU через пакет webgpu — Dawn). Включается KONTUR_GPU:
 //   1 / on / all — все перенесённые этапы; список через запятую (filters,ao,gi,sun,shade,lamps,materials,post,paint) — только они;
-//   0 / пусто — выкл.
+//   0 / пусто — выкл. raster (прототип, только явно: «1,raster» или «raster») — проходы SVG растеризует видеокарта
+//   (gpu-raster.mjs) вместо resvg; кадр отличается от resvg сглаживанием краёв.
 // Устройство живёт в отдельном потоке (gpu-worker.mjs); этап отдаёт задание и ждёт его через Atomics.wait, так что
 // вызов синхронный, как у пула потоков. Нет пакета, нет адаптера или ошибка задания — этап считается на процессоре
 // (после первой ошибки GPU выключается до конца процесса, причина — в gpuInfo()). GPU считает во float32: кадр
@@ -10,8 +11,10 @@ import { workerExecArgv, rows } from './pool.mjs';
 
 const STAGES = ['filters', 'ao', 'gi', 'sun', 'shade', 'lamps', 'materials', 'post', 'paint'];
 const env = String(process.env.KONTUR_GPU ?? '').trim().toLowerCase();
-const wanted = !isMainThread || !env || env === '0' || env === 'off' || env === 'false' ? new Set()
-  : /^(1|on|all|true)$/.test(env) ? new Set(STAGES) : new Set(env.split(/[\s,]+/).filter((s) => STAGES.includes(s)));
+const tokens = !isMainThread || !env || env === '0' || env === 'off' || env === 'false' ? [] : env.split(/[\s,]+/).filter(Boolean);
+const wanted = new Set(tokens.some((t) => /^(1|on|all|true)$/.test(t)) ? STAGES : tokens.filter((s) => STAGES.includes(s)));
+/** Растеризовать проходы на видеокарте (KONTUR_GPU с raster)? Решается в главном потоке. */
+export const rasterWanted = () => tokens.includes('raster');
 
 /**
  * Программный адаптер (WARP «Microsoft Basic Render Driver», SwiftShader, llvmpipe — машины без видеокарты, CI):

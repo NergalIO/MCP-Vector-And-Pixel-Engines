@@ -142,6 +142,12 @@ const svgH = (svg) => +(/<svg[^>]*\sheight="([\d.]+)"/.exec(svg)?.[1] || 0);
 // системные шрифты грузятся только для кадров с текстом — это заметная часть времени
 const resvgOpts = (svg, width) => ({ fitTo: width ? { mode: 'width', value: width } : { mode: 'original' }, font: { loadSystemFonts: svg.includes('<text') } });
 const resvgRender = async (svg, width) => (resvgAsync ? resvgAsync(svg, resvgOpts(svg, width)) : new resvg(svg, resvgOpts(svg, width)).render());
+/** SVG → { width, height, pixels } с умножением на альфу (только resvg-js, иначе null): запасные слои растеризатора GPU. */
+export async function svgToPremul(svg, width) {
+  if (!resvg) return null;
+  const r = await resvgRender(svg, width);
+  return { width: r.width, height: r.height, pixels: r.pixels };
+}
 /** Премультиплицированные RGBA → обычные (так же, как tiny-skia при записи PNG: c / (a/255) + 0.5). */
 export function demultiply(px) {
   const out = new Uint8Array(px.length);

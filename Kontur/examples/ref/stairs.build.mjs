@@ -19,6 +19,7 @@ const ZL = 14.0, XL = -4.65; // левый дом: фасад и боковая 
 const ZB = 24.4; // фасады «Ткани» и «Почты»
 const ZM = 27.8; // дом с аркой наверху малого марша
 const UP = 4.05; // площадка у арки
+const TKR = 1.1; // высота конька «Ткани» над карнизом (по ней же — трубы на скате)
 const ZR = 24.4, UR = 3.3; // верхняя улица справа (фасад «Рынка», её уровень)
 
 /* ---------- экран ↔ мир ---------- */
@@ -39,7 +40,7 @@ const FZ = (Z, x0 = -30, x1 = 30, h = 20, y0 = 0) => ({ o: [x0, y0, Z], u: [1, 0
 /** Стена X = const, смотрит в +X (видна слева от точки схода). */
 const FXp = (X, z0, z1, h = 20, y0 = 0) => ({ o: [X, y0, z0], u: [0, 0, 1], v: [0, 1, 0], n: [1, 0, 0], w: z1 - z0, h });
 /** Окно по прямоугольнику стекла на экране. */
-const win = (F, x1, y1, x2, y2, o = {}) => { const r = rectF(F, x1, y1, x2, y2); return { type: 'window', on: F, a: r.a, b: r.b, w: r.w, h: r.h, lit: !!o.lit, shut: o.shut ?? null, box: !!o.box, key: o.key ?? r.z - 0.02 }; };
+const win = (F, x1, y1, x2, y2, o = {}) => { const r = rectF(F, x1, y1, x2, y2); return { type: 'window', on: F, a: r.a, b: r.b, w: r.w, h: r.h, lit: !!o.lit, shut: o.shut ?? null, ajar: o.ajar ?? AJAR, box: !!o.box, key: o.key ?? r.z - 0.02 }; };
 /** Предмет на грани по прямоугольнику на экране. */
 const onRect = (type, F, x1, y1, x2, y2, o = {}) => { const r = rectF(F, x1, y1, x2, y2); return { type, on: F, a: r.a, b: r.b, w: r.w, h: r.h, key: r.z - 0.03, ...o }; };
 /** Шлагбаум поперёк правой лестницы на глубине Z: тумба, красно-белая стрела, табличка «только для инспектора». */
@@ -58,7 +59,11 @@ const X_ = (x, Z) => ((x - cx) * Z) / f, Y_ = (y, Z) => camH - ((y - hor) * Z) /
 /** Плоскость z = Z для предметов в пикселях референса (stairs.detail.mjs): линия земли gy этой глубины. */
 const PX = (Z) => ({ Z, gy: hor + (camH * f) / Z });
 const SHUT = '#1a5088';
+const AJAR = 0.38; // ставни приоткрыты: дальняя кромка отходит от стены (рад; у pxWin — то же по умолчанию)
+/** Поворот стрелок указателя (столб в xz(1437, 882)) к правому краю низа центральной лестницы (1.06, 14.95). */
+const STAIRS_YAW = (() => { const [X, Z] = gp(1437, 882); return Math.atan2(14.95 - Z, X - 1.06); })();
 const FONT = 'Candara, Arial Narrow, sans-serif'; // шрифт вывесок и указателей
+const SIGN_FONT = 'Constantia, Georgia, serif'; // антиква для вывески лавки, как на референсе
 
 /* ---------- предметы этой сцены ---------- */
 /** Арочный проём с каменным кольцом на грани: {on:F, a, w, spring, color, ring, dark, door}. */
@@ -77,25 +82,44 @@ registerWorldItem('archDoor', { doc: 'арочный проём', build: (S, d) 
     prims.push(S.det(fr, fr.rect(a, b + 0.01, ring, Math.min(0.38, sp - b)), jit(stone, 0.07), { ink: true, sw: sw * 0.5, n: fr.tilt(side ? 0.2 : -0.2, 0, 1) }));
   }
   // проём: глубина арки (тёплая штукатурка), дверь в глубине
-  prims.push(S.det(fr, [fr.at(d.a, 0), fr.at(d.a + d.w, 0), ...arc(R).reverse().map(([a, b]) => fr.at(a, b))], d.dark || '#c89a6a', { spec: 0.05 }));
-  if (d.door) {
-    const dw = d.w * 0.82, da = d.a + (d.w - dw) / 2, dsp = sp - 0.05, dR = dw / 2, dc = da + dR;
-    const darc = []; for (let k = 0; k <= 16; k++) { const t = Math.PI * (k / 16); darc.push(fr.at(dc - Math.cos(t) * dR, dsp + Math.sin(t) * dR)); }
-    if (d.leaf) { // открытая створка у левого косяка, в глубине — дверь потемнее
-      prims.push(S.det(fr, [fr.at(da, 0), fr.at(da + dw, 0), ...darc.reverse()], dark(d.dark || '#c89a6a', 0.25), { spec: 0.05 }));
-      // створка по форме арки: верх идёт по окружности проёма, доски, кованые петли и кольцо
-      const lw = d.w * d.leaf, la = d.a + 0.03, Ri = R - 0.03, topAt = (x) => sp + Math.sqrt(Math.max(0, Ri * Ri - (x - ac) ** 2));
-      const lp = [fr.at(la, 0), fr.at(la + lw, 0)];
-      for (let k = 0; k <= 12; k++) { const x = la + lw - (lw * k) / 12; lp.push(fr.at(x, topAt(x))); }
-      prims.push(S.det(fr, lp, d.door, { ink: true, sw: sw * 0.8, spec: 0.25 }));
-      for (let k = 1; k < 4; k++) { const x = la + (lw * k) / 4; prims.push(S.det(fr, fr.rect(x - 0.008, 0.04, 0.016, topAt(x) - 0.08), dark(d.door, 0.4), { bump: true, n: fr.tilt(1, 0, 0.6) })); }
-      for (const y of [0.45, sp - 0.2]) prims.push(S.det(fr, fr.rect(la + 0.02, y, lw * 0.75, 0.05), '#2a2224', { bump: true, spec: 0.7, ink: true, sw: sw * 0.4 }));
-      const hx = la + lw - 0.1, hy = 1.05; prims.push(S.det(fr, [fr.at(hx - 0.04, hy), fr.at(hx, hy - 0.05), fr.at(hx + 0.04, hy), fr.at(hx, hy + 0.05)], '#c8a050', { bump: true, spec: 0.9 }));
-    } else {
-      prims.push(S.det(fr, [fr.at(da, 0), fr.at(da + dw, 0), ...darc.reverse()], d.door, { ink: true, sw: sw * 0.8, spec: 0.25 }));
-      for (let k = 1; k < 5; k++) prims.push(S.det(fr, fr.rect(da + (dw * k) / 5 - 0.015, 0.05, 0.03, dsp + 0.2), dark(d.door, 0.35), { n: fr.tilt(1, 0, 0.6) }));
+  const opening = [fr.at(d.a, 0), fr.at(d.a + d.w, 0), ...arc(R).reverse().map(([a, b]) => fr.at(a, b))];
+  prims.push(S.det(fr, opening, d.dark || '#c89a6a', { spec: 0.05 }));
+  // depth — проём в толще стены: задняя стенка с дверью на глубине depth и видимые откосы (при косом взгляде на
+  // боковую стену виден дальний откос); всё, что за проёмом, обрезано его контуром
+  const inner = prims.length;
+  let fd = fr;
+  if (d.depth) {
+    fd = S.frame(sub(F.o, mul(F.n, d.depth)), F.u, F.v, F.w, F.h, F.n);
+    prims.push(S.det(fd, [fd.at(d.a, 0), fd.at(d.a + d.w, 0), ...arc(R).reverse().map(([a, b]) => fd.at(a, b))], dark(d.dark || '#c89a6a', 0.3), { spec: 0.05 }));
+    const Q = [[d.a, 0], ...arc(R, 24), [d.a + d.w, 0]], cIn = [ac, sp * 0.5];
+    for (let i = 0; i < Q.length - 1; i++) {
+      const [a0, b0] = Q[i], [a1, b1] = Q[i + 1];
+      let na = b1 - b0, nb = -(a1 - a0);
+      if (na * (cIn[0] - a0) + nb * (cIn[1] - b0) < 0) { na = -na; nb = -nb; }
+      const l = Math.hypot(na, nb) || 1, nw = add(mul(F.u, na / l), mul(F.v, nb / l)), p0 = fr.at(a0, b0);
+      if (!S.faces(nw, p0)) continue;
+      prims.push(S.base([p0, fr.at(a1, b1), fd.at(a1, b1), fd.at(a0, b0)], d.reveal || d.dark || '#c89a6a', nw, [...nw, dot(nw, p0)], { ink: false, spec: 0.05 }));
     }
   }
+  if (d.door) {
+    const dw = d.w * 0.82, da = d.a + (d.w - dw) / 2, dsp = sp - 0.05, dR = dw / 2, dc = da + dR;
+    const darc = []; for (let k = 0; k <= 16; k++) { const t = Math.PI * (k / 16); darc.push(fd.at(dc - Math.cos(t) * dR, dsp + Math.sin(t) * dR)); }
+    if (d.leaf) { // открытая створка у левого косяка, в глубине — дверь потемнее
+      prims.push(S.det(fd, [fd.at(da, 0), fd.at(da + dw, 0), ...darc.reverse()], dark(d.dark || '#c89a6a', 0.25), { spec: 0.05 }));
+      // створка по форме арки: верх идёт по окружности проёма, доски, кованые петли и кольцо
+      const lw = d.w * d.leaf, la = d.a + 0.03, Ri = R - 0.03, topAt = (x) => sp + Math.sqrt(Math.max(0, Ri * Ri - (x - ac) ** 2));
+      const lp = [fd.at(la, 0), fd.at(la + lw, 0)];
+      for (let k = 0; k <= 12; k++) { const x = la + lw - (lw * k) / 12; lp.push(fd.at(x, topAt(x))); }
+      prims.push(S.det(fd, lp, d.door, { ink: true, sw: sw * 0.8, spec: 0.25 }));
+      for (let k = 1; k < 4; k++) { const x = la + (lw * k) / 4; prims.push(S.det(fd, fd.rect(x - 0.008, 0.04, 0.016, topAt(x) - 0.08), dark(d.door, 0.4), { bump: true, n: fd.tilt(1, 0, 0.6) })); }
+      for (const y of [0.45, sp - 0.2]) prims.push(S.det(fd, fd.rect(la + 0.02, y, lw * 0.75, 0.05), '#2a2224', { bump: true, spec: 0.7, ink: true, sw: sw * 0.4 }));
+      const hx = la + lw - 0.1, hy = 1.05; prims.push(S.det(fd, [fd.at(hx - 0.04, hy), fd.at(hx, hy - 0.05), fd.at(hx + 0.04, hy), fd.at(hx, hy + 0.05)], '#c8a050', { bump: true, spec: 0.9 }));
+    } else {
+      prims.push(S.det(fd, [fd.at(da, 0), fd.at(da + dw, 0), ...darc.reverse()], d.door, { ink: true, sw: sw * 0.8, spec: 0.25 }));
+      for (let k = 1; k < 5; k++) prims.push(S.det(fd, fd.rect(da + (dw * k) / 5 - 0.015, 0.05, 0.03, dsp + 0.2), dark(d.door, 0.35), { n: fd.tilt(1, 0, 0.6) }));
+    }
+  }
+  if (d.depth) for (let i = inner; i < prims.length; i++) prims[i].clip = opening;
   S.item(d.key ?? z - 0.02, prims, { name: 'arch_door' });
 } });
 /** Табличка с несколькими строками: {on:F, a, b, w, h, lines:[text…], color, textColor, border, size, sizes}. */
@@ -159,10 +183,15 @@ registerWorldItem('shopWin', { doc: 'витрина с полками', build: (
 const BLUE = '#3a5a9a', TEAL = '#2f7a7a', RED = '#b8402e', WOOD = '#8a5230';
 const OCHRE = '#f8e0a4', PINK = '#e2a49a', POST = '#dcdca0', MID = '#efc488', ROSE = '#e0a0a0', BRICK = '#c07858';
 const STONE = '#8e726a', STONE_HI = '#c4aea4', STEP = '#c4aea4', IRON = '#2c2428';
+// ступени: светлая проступь, подступёнок темнее (иначе марш читается полосатой плоскостью)
+const TREAD = '#e0ccbe', RISER = '#a8908a';
 
 /* ---------- грани ---------- */
 const FL = FZ(ZL, -12, XL, 14); // левый дом, фасад
 const FLs = FXp(XL, ZL, 15.6, 14); // его боковая стена
+const FLa = FXp(XL, 9.0, 15.6, 14); // она же от края кадра: арка на ней смотрит вправо, как на референсе
+/** Точка на боковой стене левого дома X = XL + off под пикселем (x, y): [X, Y, Z]. */
+const onXL = (x, y, off = 0.05) => { const X = XL + off, Z = (X * f) / (x - cx); return [X, camH - ((y - hor) * Z) / f, Z]; };
 const FP = FZ(ZB, -6.9, -0.85, 8); // «Ткани»
 const FPt = FZ(ZB, -6.9, -0.85, 6, T); // «Ткани» от пола террасы
 const FPo = FZ(ZB, 0.82, 5.9, 8); // «Почта»
@@ -179,12 +208,13 @@ const items = [
   // терраса: подпорная стена (только лицо — пол рисуется землёй, чтобы не перекрывать стоящее на нём)
   { type: 'box', key: ZW, x: [XL, -1.38], y: [0, T], z: [ZW, ZW + 0.4], color: STONE, pmat: 'ashlar' },
   { type: 'box', key: ZW, x: [1.42, 4.75], y: [0, T], z: [ZW, ZW + 0.4], color: STONE, pmat: 'ashlarR' },
-  { type: 'flatGround', key: 1e6, x: [-7, 4.75], y: T, z: [ZW, 30], mat: false, color: '#b89888', pmat: 'terrace', spec: 0.25 },
+  { type: 'flatGround', key: 1e6, x: [-7, 5.9], y: T, z: [ZW, 30], mat: false, color: '#b89888', pmat: 'terrace', spec: 0.25 },
   // карниз стены
   { type: 'box', key: ZW - 0.08, x: [XL, -1.38], y: [T - 0.12, T + 0.03], z: [ZW - 0.08, ZW + 0.3], color: STONE_HI, pmat: 'stone' },
   { type: 'box', key: ZW - 0.08, x: [1.42, 4.75], y: [T - 0.12, T + 0.03], z: [ZW - 0.08, ZW + 0.3], color: STONE_HI, pmat: 'stone' },
   // центральная лестница между парапетами
-  { type: 'stairs', x: [-1.0, 1.06], z: [14.95, 18.3], h: T, steps: 14, color: STEP, mat: 'none', pmat: 'stepStone' },
+  // ключ 14.86: после щёк (14.9) — ступени закрывают низ их внутренних граней, виден подъём; до карнизов щёк (14.84)
+  { type: 'stairs', key: 14.86, x: [-1.0, 1.06], z: [14.95, 18.3], h: T, steps: 14, color: RISER, top: TREAD, nosing: 0.045, joints: 0.55, mat: 'none', pmat: 'stepStone' },
   { type: 'box', key: 14.9, x: [-1.38, -1.0], y: [0, T + 0.06], z: [14.9, 18.3], color: '#b8a092', pmat: 'ashlarL' },
   { type: 'box', key: 14.84, x: [-1.43, -0.96], y: [T + 0.06, T + 0.17], z: [14.84, 18.35], color: STONE_HI, pmat: 'stone' },
   { type: 'box', key: 14.9, x: [1.06, 1.42], y: [0, T + 0.06], z: [14.9, 18.3], color: '#b8a092', pmat: 'ashlarL' },
@@ -192,12 +222,14 @@ const items = [
   { type: 'wallGlow', p: [-0.99, 0.9, 15.6], n: [1, 0, 0], s: 0.14, key: 15.5 },
   { type: 'wallGlow', p: [1.05, 1.5, 16.4], n: [-1, 0, 0], s: 0.14, key: 16.3 },
   // малый марш к арке
-  { type: 'stairs', x: [-0.82, 0.82], z: [ZB, 27.4], y0: T, h: UP - T, steps: 13, color: STEP, mat: 'none', pmat: 'stepStone' },
+  // ключ 24.88: после боковых стен «Ткани» и «Почты» (24.9) — ступени закрывают их низ, марш виден поднимающимся
+  { type: 'stairs', key: 24.88, x: [-0.82, 0.82], z: [ZB, 27.4], y0: T, h: UP - T, steps: 13, color: RISER, top: TREAD, nosing: 0.045, joints: 0.55, mat: 'none', pmat: 'stepStone' },
   { type: 'flatGround', key: 1e6 - 1, x: [-1.6, 1.6], y: UP, z: [27.4, 31], mat: false, color: '#c0a290', pmat: 'terrace' },
 
   /* ---------- дальние дома ---------- */
   // дом с аркой (виден в просвете между «Тканями» и «Почтой»)
-  { type: 'house', key: ZM + 0.5, x: [-1.6, 1.6], z: [ZM, 33], h: 7.9, color: MID, roof: '#e4784a', mat: 'none', pmat: 'plaster', facades: [], roofType: 'gable', roofH: 0.7 },
+  // стоит на площадке у арки (y0 = UP): с y0 = 0 фасад уходил к земле и закрывал пол террасы полосой-«бордюром»
+  { type: 'house', key: ZM + 0.5, x: [-1.6, 1.6], z: [ZM, 33], y0: UP, h: 7.9 - UP, color: MID, roof: '#e4784a', mat: 'none', pmat: 'plaster', facades: [], roofType: 'gable', roofH: 0.7, tiles: 'barrel', eave: true, roofPmat: 'roofTile' },
   { type: 'archDoor', on: FMt, ...(() => { const r = rectF(FMt, 922, 235, 988, 342); return { a: r.a, w: r.w, spring: r.h - r.w / 2 }; })(), color: '#d8b888', ring: 0.18, dark: '#5a3424', door: '#7a4428', key: ZM - 0.02 },
   { type: 'lantern', p: [X_(955, ZM), Y_(262, ZM), ZM - 0.25], s: 0.5, hangTo: Y_(222, ZM), key: ZM - 0.4, radius: 2.5, energy: 0.9 },
   win(FM, 892, 95, 924, 150, { lit: true, shut: '#b86a3a' }), win(FM, 966, 95, 998, 150, { lit: true, shut: '#b86a3a' }),
@@ -207,9 +239,16 @@ const items = [
   { type: 'pot', X: X_(1000, 27.1), Z: 27.1, Y: UP, r: 0.1, plant: 'bush', fr: 0.2, flower: '#f0a030', key: 27.0 },
 
   // «Лавка шёлка» / «Ткани» (розовый дом слева на террасе)
-  { type: 'house', key: ZB + 0.5, x: [-6.9, -0.85], z: [ZB, 32], y0: T, h: 5.25, color: PINK, roof: '#e4784a', mat: 'none', pmat: 'plasterRose', facades: [], roofType: 'gable', roofH: 0.9 },
-  ...[[420, 15, 442, 50], [482, 10, 503, 45], [626, 5, 642, 38], [817, 0, 836, 28]].map(([x1, y1, x2, y2]) => { const Z = ZB + 1.2; return { type: 'box', key: ZB - 0.5, x: [X_(x1, Z), X_(x2, Z)], y: [Y_(y2, Z), Y_(y1, Z)], z: [Z, Z + 0.4], color: '#c88068', pmat: 'plaster' }; }),
-  onRect('signboard', FP, 405, 195, 578, 245, { text: 'ЛАВКА ШЁЛКИНА', color: '#f6ecdc', textColor: '#9a2430', border: '#c8a888', m: 0.05, size: 0.27, font: FONT, key: ZB - 0.06 }),
+  { type: 'house', key: ZB + 0.5, x: [-6.9, -0.85], z: [ZB, 32], y0: T, h: 5.25, color: PINK, roof: '#e4784a', mat: 'none', pmat: 'plasterRose', facades: [], roofType: 'gable', roofH: TKR, tiles: 'barrel', eave: true, roofPmat: 'roofTile' },
+  // трубы на переднем скате «Ткани» (roofChimney): стоят в глубине ската, низ граней — по скату, у основания оклад,
+  // у трёх — глиняные горшки, у одной — плоская плита; [x экрана, ширина, верх тела на экране (по референсу), горшок]
+  ...[[428, 0.34, 40, true], [495, 0.5, 22, false], [636, 0.32, 30, true], [828, 0.36, 24, true]].map(([sx, w, yt, pot]) => {
+    const Z = ZB + 1.0, X = X_(sx, Z), y1 = T + 5.25, roof = [ZB - 0.3, y1 - 0.12, (ZB + 32) / 2, y1 + TKR];
+    const yR = roof[1] + ((Z - roof[0]) / (roof[2] - roof[0])) * (roof[3] - roof[1]);
+    return { type: 'roofChimney', x: [X - w / 2, X + w / 2], z: [Z, Z + 0.45], roof, up: Y_(yt, Z) - yR, pot, potH: 0.24, color: '#d4a08a', cap: '#8a5a50', key: ZB - 0.5, pmat: 'plaster' };
+  }),
+  // вывеска антиквой с полями (кегль под 13 букв: текст не доходит до рамки)
+  onRect('signboard', FP, 405, 195, 578, 245, { text: 'ЛАВКА ШЁЛКИНА', color: '#f6ecdc', textColor: '#9a2838', border: '#c8a888', m: 0.05, size: 0.2, font: SIGN_FONT, key: ZB - 0.06 }),
   { type: 'awning', x: [X_(382, ZB), X_(576, ZB)], z: ZB, y: Y_(255, ZB), depth: 0.9, drop: 0.55, colors: ['#d84a3a', '#f4ece0'], stripe: 0.24, key: ZB - 0.95 },
   onRect('plate', FP, 600, 250, 718, 295, { lines: ['ТКАНИ'], color: '#7a4a8a', border: '#5a3068', textColor: '#f6f0f4', size: 0.34, key: ZB - 0.06 }),
   { type: 'door', on: FPt, a: rectF(FPt, 627, 320, 695, 450).a, w: rectF(FPt, 627, 320, 695, 450).w, h: 2.05, color: '#b83a2a', key: ZB - 0.03 },
@@ -225,7 +264,7 @@ const items = [
   { type: 'drape', key: ZB - 0.3, per: 3, pts: [[755, 214, 1.2], [775, 215, 1.5], [795, 218, 1.6], [815, 215, 1.2], [790, 232, 0.9], [835, 216, 0.8]].map(([x, y, L]) => [X_(x, ZB - 0.1), Y_(y, ZB - 0.1), ZB - 0.1, L]) },
 
   // «Почта»
-  { type: 'house', key: ZB + 0.5, x: [0.82, 5.9], z: [ZB, 32], y0: T, h: 5.65, color: POST, roof: '#e4784a', mat: 'none', pmat: 'plaster', facades: [], roofType: 'gable', roofH: 1.0 },
+  { type: 'house', key: ZB + 0.5, x: [0.82, 5.9], z: [ZB, 32], y0: T, h: 5.65, color: POST, roof: '#e4784a', mat: 'none', pmat: 'plaster', facades: [], roofType: 'gable', roofH: 1.1, tiles: 'barrel', eave: true, roofPmat: 'roofTile' },
   { type: 'archDoor', on: FPot, ...(() => { const r = rectF(FPot, 1082, 315, 1150, 470); return { a: r.a, w: r.w, spring: 2.07 - r.w / 2 }; })(), color: '#d8ccb0', ring: 0.14, dark: '#2a3a6a', door: '#2a4a8a', key: ZB - 0.02 },
   onRect('poster', FPo, 1096, 342, 1136, 376, { color: '#f2c440', frame: '#c89020', art: 'none', key: ZB - 0.05 }),
   { type: 'mailbox', X: X_(1175, ZB), Y: Y_(400, ZB), z: ZB },
@@ -240,8 +279,12 @@ const items = [
   { type: 'drape', key: ZB - 0.2, per: 6, pts: [[1320, 30, 1.6], [1345, 30, 2.4], [1365, 30, 2.6], [1385, 40, 3.4], [1410, 30, 3.6], [1425, 120, 2.6], [1340, 60, 1.2], [1400, 80, 3.0]].map(([x, y, L]) => [X_(x, ZB - 0.1), Y_(y, ZB - 0.1), ZB - 0.1, L]) },
   
   // «Рынок по-деликатески» на верхней улице справа и дома за ним
-  { type: 'box', key: 19.3, x: [4.75, 12], y: [0, UR], z: [19.3, ZR], color: STONE, pmat: 'stone' },
-  { type: 'house', key: ZR + 0.5, x: [5.9, 9.2], z: [ZR, 30], y0: UR, h: 6.5, color: ROSE, mat: 'none', pmat: 'plasterRose', facades: [], roofType: 'flat' },
+  // верхняя улица: подпорная стена от угла «Почты» (X = 5.9) — с X = 4.75 её левая грань стояла перед витриной «Почты»;
+  // у верха правой лестницы — площадка во всю ширину марша
+  { type: 'box', key: 19.3, x: [5.9, 12], y: [0, UR], z: [19.3, ZR], color: STONE, pmat: 'stone' },
+  { type: 'box', key: 19.31, x: [5.1, 5.9], y: [0, UR], z: [19.3, 20.3], color: STONE, pmat: 'stone' },
+  // ключ больше, чем у «Почты» (ZB + 0.5): левая стена «Рынка» (X = 5.9) уходит вглубь за «Почту» и рисуется раньше неё
+  { type: 'house', key: ZR + 0.56, x: [5.9, 9.2], z: [ZR, 30], y0: UR, h: 6.5, color: ROSE, mat: 'none', pmat: 'plasterRose', facades: [], roofType: 'flat' },
   onRect('plate', FR, 1500, 310, 1640, 377, { lines: ['РЫНОК', 'ПО-ДЕЛИКАТЕСКИ'], sizes: [0.36, 0.17], color: '#f6ecdc', border: '#b08860', textColor: '#a8303a', key: ZR - 0.06 }),
   { type: 'awning', x: [X_(1480, ZR), X_(1596, ZR)], z: ZR, y: Y_(195, ZR), depth: 0.8, drop: 0.6, colors: ['#3a9a8a', '#f2f0e4'], stripe: 0.18, key: ZR - 0.85 },
   ...[[1482, 268, 1520, 280, '#e88a30'], [1525, 266, 1560, 280, '#d84030'], [1563, 268, 1598, 280, '#f0c040'], [1600, 268, 1640, 280, '#f0a030']].map(([x1, y1, x2, y2, c]) => ({ type: 'crate', o: [X_(x1, ZR - 0.3), ZR - 0.42], len: X_(x2, ZR - 0.3) - X_(x1, ZR - 0.3), wid: 0.36, h: 0.3, y0: 4.3, color: '#a86a38', fill: c, fruit: 0.05, key: ZR - 0.45 })),
@@ -266,34 +309,45 @@ const items = [
   { type: 'planter', x: [X_(1822, 19.9), X_(1890, 19.9)], y: Y_(150, 20), z: 19.9, flower: '#f6f2e8', trail: 3, trailLen: 0.4 },
 
   /* ---------- левый дом ---------- */
-  { type: 'box', key: ZL + 0.01, x: [-14, XL], y: [0, 7.6], z: [ZL, 15.6], color: OCHRE, pmat: 'plaster' },
+  { type: 'box', key: ZL + 0.01, x: [-14, XL], y: [0, 3.12], z: [ZL, 15.6], color: OCHRE, pmat: 'plaster' },
+  // стена над балконом (X = −5.55, смотрит вправо) продолжается до угла дома: без торца ниши, смотревшего в камеру
+  { type: 'box', key: ZL + 0.008, x: [-14, -5.55], y: [3.12, 7.6], z: [ZL, 15.6], color: OCHRE, pmat: 'plaster' },
+  { type: 'box', key: ZL + 0.006, x: [-12, XL + 0.1], y: [3.12, 3.27], z: [ZL, 15.6], color: STONE_HI, pmat: 'stone' },
+  // окна на ней: со ставнями над балконом и верхнее с красными ставнями (раньше — нарисованы в пикселях на торце)
+  { type: 'window', on: FXp(-5.55, 10.4, 15.6, 4.33, 3.27), a: 14.2 - 10.4, b: 0.42, w: 0.9, h: 1.55, lit: false, shut: SHUT, box: false, ajar: AJAR, key: ZL - 0.002 },
+  { type: 'window', on: FXp(-5.55, 10.4, 15.6, 4.33, 3.27), a: 14.2 - 10.4, b: 2.75, w: 0.9, h: 1.1, lit: false, shut: '#b8402e', box: false, ajar: AJAR, key: ZL - 0.003 },
+  // первый этаж ближе к камере: боковая стена с аркой (смотрит вправо), над ним — балкон
+  { type: 'box', key: ZL + 0.005, x: [-14, XL], y: [0, 3.12], z: [9.0, ZL], color: OCHRE, pmat: 'plaster' },
   { type: 'box', key: 15.7, x: [-14, -6.9], y: [0, 7.4], z: [15.6, ZB], color: '#e8c098', pmat: 'plaster' },
-  { type: 'archDoor', on: FL, ...(() => { const r = rectF(FL, 74, 455, 236, 862); return { a: r.a, w: r.w, spring: r.h - r.w / 2 }; })(), color: '#c4a898', ring: 0.3, dark: '#d89858', door: '#4a2e22', leaf: 0.42, stones: 15, key: ZL - 0.02 },
-  onRect('plate', FL, 22, 474, 55, 516, { lines: ['12'], color: '#2a4070', border: '#c8c0b0', textColor: '#f4f0e6', size: 0.17, key: ZL - 0.05 }),
-  { type: 'lantern', p: [X_(170, ZL + 0.3), Y_(522, ZL + 0.3), ZL + 0.3], s: 0.72, hangTo: Y_(455, ZL + 0.3), key: ZL - 0.025, radius: 3.5, energy: 1.2 },
+  // проём по референсу: внутренние края x 75…248 px, верх y 458 px; в глубине 0.7 м — дверь (видна слева) и освещённый дальний откос
+  { type: 'archDoor', on: FLa, ...(() => { const za = onXL(75, 0, 0)[2], zb = onXL(248, 0, 0)[2], R = (zb - za) / 2, top = camH - ((458 - hor) * (za + R)) / f; return { a: za - 9.0, w: zb - za, spring: top - R }; })(),
+    color: '#c4a898', ring: 0.3, dark: '#d89858', reveal: '#e8b070', depth: 0.7, door: '#4a2e22', stones: 15, key: 13.0 },
+  onRect('plate', FLa, 22, 474, 55, 516, { lines: ['12'], color: '#2a4070', border: '#c8c0b0', textColor: '#f4f0e6', size: 0.17, key: 12.9 }),
+  // фонарь висит в проёме арки, под её сводом
+  { type: 'lantern', ...(() => { const p = onXL(170, 522, -0.3); return { p, hangTo: camH - ((458 - hor) * p[2]) / f }; })(), s: 0.72, key: 12.8, radius: 3.5, energy: 1.2 },
   // балкон смотрит вправо, как на референсе: перила вдоль X = −5 уходят вглубь (z 10.5…14), верх перил y≈271…299 px
-  { type: 'box', key: 10.4, x: [-12, -4.98], y: [3.12, 3.27], z: [10.4, ZL], color: STONE_HI, pmat: 'stone' },
+  { type: 'box', key: 10.4, x: [-12, XL + 0.1], y: [3.12, 3.27], z: [10.4, ZL], color: STONE_HI, pmat: 'stone' },
   { type: 'rail', from: [-5.0, 3.27, 10.45], to: [-5.0, 3.27, ZL], h: 0.68, iron: true, step: 0.12, key: 10.35, color: IRON },
   { type: 'zPlanter', X: -5.0, z: [10.95, 12.3], y: 3.33, h: 0.2, d: 0.22, flower: ['#e85a4a', '#d84a3a', '#f08060'], key: 10.3 },
   { type: 'zPlanter', X: -5.0, z: [12.6, 13.9], y: 3.95, h: 0.16, d: 0.2, flower: ['#f4f0e4', '#f8f4ec', '#e8e0f0'], key: 10.32 },
   { type: 'pot', X: -5.3, Z: 11.2, Y: 3.27, r: 0.13, plant: 'bush', fr: 0.4, flower: ['#e8603a', '#f29040', '#d84a30'], flowers: 26, key: 10.31 },
   // стена за балконом тоже смотрит вправо (X = −5.55), окно со ставнями — на ней
   { type: 'box', key: 10.38, x: [-14, -5.55], y: [3.27, 7.6], z: [10.4, ZL], color: OCHRE, pmat: 'plaster' },
-  { type: 'window', on: FXp(-5.55, 10.4, ZL, 4.33, 3.27), a: 12.2 - 10.4, b: 0.42, w: 1.05, h: 1.55, lit: false, shut: SHUT, box: false, key: 10.37 },
+  { type: 'window', on: FXp(-5.55, 10.4, ZL, 4.33, 3.27), a: 12.2 - 10.4, b: 0.42, w: 1.05, h: 1.55, lit: false, shut: SHUT, box: false, ajar: AJAR, key: 10.37 },
   // окна по плитке t00: светлое окно с жалюзи, высокое окно у балкона, верхний этаж
-  { type: 'pxWin', ...PX(ZL - 0.01), glass: [281, 190, 326, 382], shutL: [249, 277], shutR: [330, 352], shut: SHUT, cols: 2, rows: 4, key: ZL - 0.035 },
-  { type: 'pxShutter', ...PX(ZL - 0.01), r: [200, -12, 260, 55], color: '#b8402e', key: ZL - 0.03 },
-  { type: 'pxShutter', ...PX(ZL - 0.01), r: [262, -12, 278, 45], color: SHUT, key: ZL - 0.03 },
-  { type: 'drape', key: 10.2, per: 5, pts: [[10, 0, 1.0], [40, 20, 0.9], [70, 0, 0.6], [95, 10, 0.4]].map(([x, y, L]) => [X_(x, ZL - 0.05), Y_(y, ZL - 0.05), ZL - 0.05, L]) },
-  { type: 'drape', key: ZL - 0.15, per: 5, pts: [[20, 560, 1.8], [10, 620, 1.4], [268, 0, 3.2], [290, 0, 3.0], [305, 40, 2.6], [325, 0, 3.4], [280, 150, 2.2]].map(([x, y, L]) => [X_(x, ZL - 0.05), Y_(y, ZL - 0.05), ZL - 0.05, L]) },
+  { type: 'drape', key: 10.2, per: 5, pts: [[10, 0, 1.0], [40, 20, 0.9], [70, 0, 0.6], [95, 10, 0.4]].map(([x, y, L]) => [...onXL(x, y, -0.85), L]) },
+  // плющ у края кадра — на боковой стене с аркой
+  { type: 'drape', key: 12.5, per: 5, pts: [[20, 560, 1.8], [10, 620, 1.4]].map(([x, y, L]) => [...onXL(x, y), L]) },
+  { type: 'drape', key: 15.55, per: 5, pts: [[268, 0, 3.2], [290, 0, 3.0], [305, 40, 2.6], [325, 0, 3.4], [280, 150, 2.2]].map(([x, y, L]) => { const p = onXL(x, y, -2.2); return [...p, (L * p[2]) / (ZL - 0.05)]; }) },
   onRect('poster', FLs, 280, 590, 318, 740, { color: '#f2eadc', frame: '#8a6a4a', art: 'text', key: ZL - 0.005 }),
-  { type: 'wallBulb', ...PX(ZL - 0.01), at: [200, 88], r: 10, key: ZL - 0.06 },
   // гортензия у левого края (плитка t20)
-  { type: 'hydrangea', ...PX(11.06), pot: [72, 991], potW: 94, potH: 88, flower: ['#b89ae0', '#c8a8e8', '#a888d8', '#d8b0e0'],
-    leaves: [[18, 880, 26], [60, 892, 28], [105, 878, 26], [130, 850, 20], [10, 845, 20], [72, 860, 26]],
-    heads: [[25, 826, 24], [60, 806, 24], [96, 798, 24], [118, 832, 22], [72, 852, 24], [32, 855, 20]] },
-  { type: 'bin', X: -4.28, Z: 14.55, r: 0.24, h: 1.02 }, // между фонарным столбом и стеной дома
-  { type: 'bollard', ...xz(183, 966), r: 0.16, h: 0.55, color: '#4e4a4e', band: '#c8a040' },
+  // (перед боковой стеной: пиксели референса сдвинуты на 18 px вправо и 52 px вниз, иначе горшок за линией стены)
+  ((mv) => ({ type: 'hydrangea', ...PX(10.2), pot: mv([72, 991]), potW: 94, potH: 88, flower: ['#b89ae0', '#c8a8e8', '#a888d8', '#d8b0e0'],
+    leaves: [[18, 880, 26], [60, 892, 28], [105, 878, 26], [130, 850, 20], [10, 845, 20], [72, 860, 26]].map(mv),
+    heads: [[25, 826, 24], [60, 806, 24], [96, 798, 24], [118, 832, 22], [72, 852, 24], [32, 855, 20]].map(mv) }))(([x, y, r]) => (r == null ? [x + 18, y + 52] : [x + 18, y + 52, r])),
+  // урна и столбик — у боковой стены правее арки (её кольцо кончается на z 13.55), проход в арку свободен
+  { type: 'bin', X: -4.36, Z: 14.2, r: 0.24, h: 1.02 },
+  { type: 'bollard', X: -4.45, Z: 13.75, r: 0.16, h: 0.55, color: '#4e4a4e', band: '#c8a040' },
 
   /* ---------- у подножия стены ---------- */
   { type: 'lampPost', ...xz(432, 862), h: 2.95, s: 1.25 },
@@ -321,15 +375,16 @@ const items = [
   /* ---------- площадь ---------- */
   { type: 'manholeDeco', ...xz(775, 966), r: 0.42 },
   { type: 'hopscotch', ...xz(1290, 1030), cell: 0.48, ang: -3 },
+  // «Почта» и «Ткани» — на террасе: их стрелки повёрнуты вокруг столба к низу центральной лестницы
   { type: 'signpost', ...xz(1437, 882), h: 2.7, color: '#6a4228', font: FONT, em: 0.6, painted: true, arrows: [
     { y: Y_(533, 13.5), w: 1.22, h: 0.25, dir: -1, a: -0.62, text: 'ПЛОЩАДЬ ДАРОВ', color: '#f2ead8', textColor: '#3a2a22', size: 0.15 },
     { y: Y_(579, 13.5), w: 0.62, h: 0.26, dir: 1, a: 0.26, text: 'РЫНОК', color: '#e8902a', textColor: '#3a2210', size: 0.15 },
-    { y: Y_(635, 13.5), w: 0.76, h: 0.27, dir: -1, a: -0.08, text: 'ПОЧТА', color: '#f4ecdc', textColor: '#2a2a3a', size: 0.16 },
-    { y: Y_(686, 13.5), w: 0.78, h: 0.28, dir: -1, a: -0.06, text: 'ТКАНИ', color: '#ec8c9a', textColor: '#3a1a22', size: 0.16 },
+    { y: Y_(635, 13.5), w: 0.76, h: 0.27, dir: -1, a: -0.2, yaw: STAIRS_YAW, text: 'ПОЧТА', color: '#f4ecdc', textColor: '#2a2a3a', size: 0.16 },
+    { y: Y_(686, 13.5), w: 0.78, h: 0.28, dir: -1, a: -0.2, yaw: STAIRS_YAW, text: 'ТКАНИ', color: '#ec8c9a', textColor: '#3a1a22', size: 0.16 },
   ], vertical: { y: Y_(488, 13.5), w: 0.3, h: 0.58, a: -0.24, text: 'НЕБО', color: '#3a6ab8', textColor: '#f4f0e6', size: 0.17 } },
-  { type: 'lathe', ...xz(1665, 948), profile: 'barrel', h: 1.0, r: 0.31, color: '#a86a30', rings: { ys: [0.12, 0.45, 0.85], color: '#3a3030' }, top: '#3a3040' },
-  { type: 'duck', X: X_(1700, 11.95), Y: 1.0, Z: 11.95, s: 1.2 },
-  { type: 'barrelStaves', ...xz(1665, 948), r: 0.31, h: 1.0, n: 18, color: '#b8743a' },
+  { type: 'lathe', ...xz(1665, 948), profile: 'barrel', h: 1.0, r: 0.31, color: '#a86a30', rings: { ys: [0.12, 0.45, 0.85], color: '#3a3030' }, top: '#3a3040', key: 11.0 }, // перед звеном парапета z 11.49…
+  { type: 'duck', X: X_(1700, 11.95), Y: 1.0, Z: 11.95, s: 1.2, key: 10.98 }, // после бочки: сидит на крышке
+  { type: 'barrelStaves', ...xz(1665, 948), r: 0.31, h: 1.0, n: 18, color: '#b8743a', key: 10.99 },
   // гортензия в белом горшке у парапета (плитка t23): перед боковой гранью парапета
   { type: 'hydrangea', ...PX(11.25), keyZ: 10.45, pot: [1745, 981], potW: 84, potH: 72, potColor: '#ece6dc', flower: ['#a890e0', '#8a96e0', '#b8a0e8', '#9aa8ec'],
     leaves: [[1700, 896, 20], [1736, 898, 22], [1772, 896, 20], [1690, 880, 14], [1786, 884, 14]],
@@ -341,7 +396,7 @@ const items = [
   { type: 'drape', key: ZW - 0.1, per: 4, pts: [[745, 552, 1.0], [760, 556, 0.8], [340, 560, 1.6], [355, 600, 1.2]].map(([x, y, L]) => [X_(x, ZW - 0.05), Y_(y, ZW - 0.05), ZW - 0.05, L]) },
 
   /* ---------- правая лестница на верхнюю улицу ---------- */
-  { type: 'stairs', x: [5.1, 9.4], z: [10.5, 19.3], h: UR, steps: 22, color: '#c8a896', mat: 'none', pmat: 'stepStone' },
+  { type: 'stairs', x: [5.1, 9.4], z: [10.5, 19.3], h: UR, steps: 22, color: '#b0907f', top: '#e2c8b4', nosing: 0.045, joints: 0.6, mat: 'none', pmat: 'stepStone' },
   { type: 'stepWall', x: [4.75, 5.1], z: [10.5, 15.45], y: [0, UR * (15.45 - 10.5) / 8.8], steps: 5, over: 0.5, color: '#c8a48e', lights: true, pmat: 'ashlarL' },
   { type: 'riserLights', x: 8.6, z: [10.5, 19.3], h: UR, steps: 22, every: 3 },
   { type: 'riserLights', x: 5.5, z: [10.5, 19.3], h: UR, steps: 22, every: 4 },
@@ -420,7 +475,12 @@ export default {
     ashlar: { tex: { kind: 'tiles', su: 0.38, sv: 0.18, offset: 0.5, grout: 0.016, color: '#5e4e4e', color2: '#7a6862', palette: ['#5e4e4e', '#564646', '#685656', '#4e4242', '#625252', '#5a4a4a', '#6c5a5c'], vary: 0.35, jitter: 0.2, pillow: 0.35 }, noise: { scale: 0.5, amount: 0.15, octaves: 3 }, grime: { height: 0.4, amount: 0.12, color: '#4a3a38' } },
     ashlarR: { tex: { kind: 'tiles', su: 0.38, sv: 0.18, offset: 0.5, grout: 0.016, color: '#b08c78', color2: '#cbb09c', palette: ['#b08c78', '#a4806c', '#bc9884', '#98745e', '#b4927e', '#a88470', '#c0a08a'], vary: 0.35, jitter: 0.2, pillow: 0.35 }, noise: { scale: 0.5, amount: 0.15, octaves: 3 }, grime: { height: 0.4, amount: 0.1, color: '#4a3a38' } },
     ashlarL: { tex: { kind: 'tiles', su: 0.32, sv: 0.19, offset: 0.5, grout: 0.011, color: '#d4b49c', color2: '#8a6a5a', palette: ['#d8b8a0', '#ccaa92', '#e0c2aa', '#c4a28c', '#d2b098', '#bc9a86'], vary: 0.3, jitter: 0.12, pillow: 0.18 }, noise: { scale: 0.35, amount: 0.1, octaves: 3 }, wear: { amount: 0.25, color: '#ead6c4' }, grime: { height: 0.35, amount: 0.15, color: '#5a4a44' } },
+    // глина горшков: пятна, потёки у дна, светлые сколы на кромках (вместо гладкого пластика)
+    terracotta: { noise: { scale: 0.08, amount: 0.2, octaves: 3, color: '#a8502a' }, grime: { height: 0.18, amount: 0.35, color: '#5a3424' }, wear: { amount: 0.35, color: '#e8a878' } },
+    glaze: { noise: { scale: 0.1, amount: 0.08, octaves: 2 }, grime: { height: 0.12, amount: 0.25, color: '#8a7a6a' } },
     stepStone: { noise: { scale: 0.45, amount: 0.14, octaves: 3 }, wear: { amount: 0.3, color: '#e0c8b4' }, grime: { height: 0.06, amount: 0.25, color: '#4a3a3a' } },
+    // черепица: пятна выгоревшей глины и потемнение к карнизу (плитку рисует векторный материал barrel)
+    roofTile: { noise: { scale: 0.3, amount: 0.12, octaves: 3, color: '#a85a38' } },
     bricks: { tex: { kind: 'tiles', su: 0.25, sv: 0.085, offset: 0.5, grout: 0.012, color: '#c47a5a', color2: '#7a4a3a', jitter: 0.5, pillow: 0.2 }, noise: { scale: 0.6, amount: 0.12 } },
   },
 };

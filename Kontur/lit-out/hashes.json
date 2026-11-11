@@ -1,0 +1,50 @@
+{
+ "stairs": {
+  "hash": "0575f6adbe80",
+  "ms": 1179
+ },
+ "stairs-day": {
+  "hash": "d6d1a309d84a",
+  "ms": 494
+ },
+ "stairs-comic": {
+  "hash": "02b915771973",
+  "ms": 403
+ },
+ "stairs-night": {
+  "hash": "74e6d1a96061",
+  "ms": 410
+ },
+ "stairs-pixel": {
+  "hash": "f3be29cb545a",
+  "ms": 760
+ },
+ "stairs-golden": {
+  "hash": "1e58a052d555",
+  "ms": 468
+ },
+ "stairs-dusk": {
+  "hash": "614bf73d2255",
+  "ms": 440
+ },
+ "stairs-agx": {
+  "hash": "7853ed98f656",
+  "ms": 383
+ },
+ "stairs-none": {
+  "hash": "0b340d56c8f8",
+  "ms": 329
+ },
+ "stairs-full": {
+  "hash": "35a0f0bb1d8c",
+  "ms": 549
+ },
+ "stairs-debug": {
+  "hash": "0575f6adbe80",
+  "ms": 366
+ },
+ "stairs-bake": {
+  "hash": "41372b2ba363",
+  "ms": 158
+ }
+}

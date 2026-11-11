@@ -3,7 +3,7 @@
 // Плюс предметы plaza.props.mjs (фонари, флажки, гирлянды, ящики, горшки, перила, плакаты, вывески).
 import './plaza.props.mjs';
 import { obox } from './plaza.props.mjs';
-import { registerWorldItem, face, box, cyl, lathe, latheStack, sphere, disc, PROFILES, textPrim, dark, lite, jit, rnd, norm, sub, add, mul } from '../../engine/world3d.js';
+import { registerWorldItem, face, box, cyl, lathe, latheStack, sphere, disc, PROFILES, textPrim, dark, lite, jit, rnd, norm, sub, add, mul, dot } from '../../engine/world3d.js';
 
 const TAU = Math.PI * 2;
 const reg = (type, build) => registerWorldItem(type, { doc: type, build });
@@ -103,7 +103,40 @@ reg('bollard', (S, d) => {
 });
 
 /**
- * Указатель: столб и стрелки. {X, Z, h, r, color, arrows:[{y, w, h, dir:±1, text, color, textColor, a (сдвиг центра)}],
+ * Труба на скате: {x:[x0,x1], z:[z0,z1], roof:[ez, ey, rz, ry] — линия ската (карниз → конёк), up — высота над скатом,
+ * color, cap, pot — глиняный колпак-горшок (иначе плоская плита)}. Низ боковых граней идёт по скату, а не горизонтально,
+ * у основания — фартук-оклад; тело и колпак отбрасывают тень на черепицу.
+ */
+reg('roofChimney', (S, d) => {
+  const [x0, x1] = d.x, [z0, z1] = d.z, [ez, ey, rz, ry] = d.roof, yR = (z) => ey + ((z - ez) / (rz - ez)) * (ry - ey);
+  const top = yR(z0) + (d.up ?? 0.9), c = d.color || '#d09a84', cap = d.cap || '#8a5a50', prims = [];
+  const cen = [(x0 + x1) / 2, (yR(z0) + top) / 2, (z0 + z1) / 2], f = (ps, cc, o = {}) => prims.push(...face(S, ps, cc, { center: cen, spec: 0.1, ...o }));
+  f([[x0, yR(z0) - 0.03, z0], [x1, yR(z0) - 0.03, z0], [x1, top, z0], [x0, top, z0]], c);
+  for (const x of [x0, x1]) f([[x, yR(z0) - 0.03, z0], [x, yR(z1) - 0.03, z1], [x, top, z1], [x, top, z0]], dark(c, 0.04));
+  // подложка: цоколь шире тела, низ — по скату; на плоском окладе тело выглядело висящим над черепицей
+  const p = 0.06, hb = d.base ?? 0.16, pz0 = z0 - p, pz1 = z1 + p, bc = d.baseColor || dark(c, 0.22), pc = [cen[0], yR(z0) + hb / 2, cen[2]];
+  const g0 = (ps, col) => prims.push(...face(S, ps, col, { center: pc, spec: 0.1 }));
+  g0([[x0 - p, yR(pz0) - 0.03, pz0], [x1 + p, yR(pz0) - 0.03, pz0], [x1 + p, yR(pz0) + hb, pz0], [x0 - p, yR(pz0) + hb, pz0]], bc);
+  for (const x of [x0 - p, x1 + p]) g0([[x, yR(pz0) - 0.03, pz0], [x, yR(pz1) - 0.03, pz1], [x, yR(pz0) + hb, pz1], [x, yR(pz0) + hb, pz0]], dark(bc, 0.06));
+  g0([[x0 - p, yR(pz0) + hb, pz0], [x1 + p, yR(pz0) + hb, pz0], [x1 + p, yR(pz0) + hb, z0], [x0 - p, yR(pz0) + hb, z0]], lite(bc, 0.08));
+  // плита-оголовок со свесом
+  const m = 0.05, a0 = x0 - m, a1 = x1 + m, b0 = z0 - m, b1 = z1 + m, t1 = top + 0.07, cc = [cen[0], top + 0.035, cen[2]];
+  const g = (ps, col) => prims.push(...face(S, ps, col, { center: cc, spec: 0.2 }));
+  g([[a0, top, b0], [a1, top, b0], [a1, t1, b0], [a0, t1, b0]], cap);
+  for (const x of [a0, a1]) g([[x, top, b0], [x, top, b1], [x, t1, b1], [x, t1, b0]], dark(cap, 0.08));
+  g([[a0, top, b0], [a1, top, b0], [a1, top, b1], [a0, top, b1]], dark(cap, 0.3));
+  const it = S.item(d.key ?? z0 - 0.01, prims, { name: 'chimney' });
+  S.box3([x0, x1, yR(z0), t1, z0, z1], it);
+  if (d.pot) { // глиняный горшок с куполком
+    const r = Math.min(x1 - x0, z1 - z0) * 0.32, h = d.potH ?? 0.32;
+    lathe(S, (x0 + x1) / 2, (z0 + z1) / 2, [[r, 0, 'c'], [r * 0.82, h * 0.75], [r * 0.9, h, 'c'], [r * 1.25, h + 0.03, 'c'], [r * 0.7, h + 0.11], [0, h + 0.14]], d.potColor || '#c0643a',
+      { y0: t1, n: 14, spec: 0.25, key: (d.key ?? z0 - 0.01) - 0.005, name: 'chimney_pot' });
+  }
+});
+
+/**
+ * Указатель: столб и стрелки. {X, Z, h, r, color, arrows:[{y, w, h, dir:±1, text, color, textColor, a (сдвиг центра),
+ * yaw (поворот доски вокруг столба, рад: > 0 — левый конец уходит вглубь)}],
  * vertical:{y, w, h, text, color, textColor} — вертикальная табличка-стрелка вверх}.
  */
 reg('signpost', (S, d) => {
@@ -112,21 +145,24 @@ reg('signpost', (S, d) => {
   cyl(S, X, Z, (d.r ?? 0.06) * 1.6, 0, 0.12, dark(d.color || '#6a4228', 0.3), { key: Z - 0.1, n: 10, name: 'post_foot' });
   const zf = Z - (d.r ?? 0.06) - 0.03;
   const font = d.font || 'Arial Narrow, Arial, sans-serif', em = d.em ?? 0.6; // em — средняя ширина заглавной буквы в долях кегля
-  const board = (pts, col, txt, txtCol, size, cxy, vert, avail) => {
-    const ps = pts.map(([x, y]) => [x, y, zf]);
-    prims.push({ t: 'poly', ps, alb: col, n: [0, 0.05, -1], pl: [0, 0, -1, -zf], base: true, ink: true, sw: pxw(S, 0.018, zf), spec: 0.25, op: 1 });
+  const board = (pts, col, txt, txtCol, size, cxy, vert, avail, yaw = 0) => {
+    // yaw: доска повёрнута вокруг оси столба; всё строится в плоскости z = zf и поворачивается
+    const cs = Math.cos(yaw), sn = Math.sin(yaw), Rv = (v) => [v[0] * cs + v[2] * sn, v[1], -v[0] * sn + v[2] * cs];
+    const R = (p) => { const q = Rv([p[0] - X, 0, p[2] - Z]); return [X + q[0], p[1], Z + q[2]]; };
+    const ps = pts.map(([x, y]) => [x, y, zf]), nn = Rv([0, 0, -1]), psR = ps.map(R);
+    prims.push({ t: 'poly', ps: psR, alb: col, n: Rv([0, 0.05, -1]), pl: [...nn, dot(nn, psR[0])], base: true, ink: true, sw: pxw(S, 0.018, zf), spec: 0.25, op: 1 });
     if (d.painted) { // крашеная доска: кайма темнее, волокна, гвозди
       const cxm = ps.reduce((a, p) => a + p[0], 0) / ps.length, cym = ps.reduce((a, p) => a + p[1], 0) / ps.length;
       const inner = ps.map(([x, y]) => [cxm + (x - cxm) * (1 - 0.05 / Math.max(0.2, Math.abs(x - cxm) + 0.1)), cym + (y - cym) * 0.72, zf - 0.002]);
-      for (let i = 0; i < inner.length; i++) prims.push(S.line(inner[i], inner[(i + 1) % inner.length], dark(col, 0.28), pxw(S, 0.008, zf)));
+      for (let i = 0; i < inner.length; i++) prims.push(S.line(R(inner[i]), R(inner[(i + 1) % inner.length]), dark(col, 0.28), pxw(S, 0.008, zf)));
       const xs = ps.map((p) => p[0]), ys = ps.map((p) => p[1]), [xa, xb, ya, yb] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-      for (let k = 0; k < 4; k++) { const y = ya + ((yb - ya) * (k + 0.5)) / 4, x0 = xa + (xb - xa) * (0.1 + rnd() * 0.3); prims.push(S.line([x0, y, zf - 0.001], [x0 + (xb - xa) * (0.2 + rnd() * 0.3), y + (rnd() - 0.5) * 0.01, zf - 0.001], dark(col, 0.1), pxw(S, 0.004, zf), { op: 0.7 })); }
+      for (let k = 0; k < 4; k++) { const y = ya + ((yb - ya) * (k + 0.5)) / 4, x0 = xa + (xb - xa) * (0.1 + rnd() * 0.3); prims.push(S.line(R([x0, y, zf - 0.001]), R([x0 + (xb - xa) * (0.2 + rnd() * 0.3), y + (rnd() - 0.5) * 0.01, zf - 0.001]), dark(col, 0.1), pxw(S, 0.004, zf), { op: 0.7 })); }
     }
     // торец доски (толщина) — тёмная кромка снизу
     const lo = Math.min(...pts.map((p) => p[1])), xs = pts.filter((p) => Math.abs(p[1] - lo) < 1e-6).map((p) => p[0]);
-    if (xs.length >= 2) prims.push(S.line([Math.min(...xs), lo - 0.012, zf + 0.01], [Math.max(...xs), lo - 0.012, zf + 0.01], dark(col, 0.35), pxw(S, 0.025, zf)));
+    if (xs.length >= 2) prims.push(S.line(R([Math.min(...xs), lo - 0.012, zf + 0.01]), R([Math.max(...xs), lo - 0.012, zf + 0.01]), dark(col, 0.35), pxw(S, 0.025, zf)));
     if (txt) {
-      const fr = S.frame([cxy[0], cxy[1], zf - 0.004], vert ? [0, -1, 0] : [1, 0, 0], vert ? [1, 0, 0] : [0, 1, 0], 1, 1, [0, 0, -1]);
+      const fr = S.frame(R([cxy[0], cxy[1], zf - 0.004]), vert ? [0, -1, 0] : Rv([1, 0, 0]), vert ? Rv([1, 0, 0]) : [0, 1, 0], 1, 1, nn);
       const fit = avail ? Math.min(size, avail / (Math.max(1, [...txt].length) * em)) : size;
       prims.push(textPrim(S, fr, 0, 0, txt, fit, txtCol, { font, weight: 'bold', spacing: d.spacing }));
     }
@@ -136,7 +172,7 @@ reg('signpost', (S, d) => {
     const x0 = cx - w / 2, x1 = cx + w / 2;
     const pts = dir > 0 ? [[x0, y - hh / 2], [x1 - tip, y - hh / 2], [x1, y], [x1 - tip, y + hh / 2], [x0, y + hh / 2]]
       : [[x0 + tip, y - hh / 2], [x1, y - hh / 2], [x1, y + hh / 2], [x0 + tip, y + hh / 2], [x0, y]];
-    board(pts, A.color || '#f2ead8', A.text, A.textColor || '#2a2a3a', A.size ?? hh * 0.62, [cx + (dir > 0 ? -tip / 2 : tip / 2), y], false, w - tip - 0.12);
+    board(pts, A.color || '#f2ead8', A.text, A.textColor || '#2a2a3a', A.size ?? hh * 0.62, [cx + (dir > 0 ? -tip / 2 : tip / 2), y], false, w - tip - 0.12, A.yaw);
   }
   if (d.vertical) {
     const V = d.vertical, w = V.w ?? 0.34, hh = V.h ?? 1.2, y0 = V.y, x0 = X - w / 2 + (V.a ?? 0), tip = w * 0.6;

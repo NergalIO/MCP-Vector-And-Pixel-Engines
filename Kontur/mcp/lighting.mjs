@@ -26,7 +26,9 @@ import { bloom, depthOfField, autoExposure } from './lit/post.mjs';
 import { tonemapFrame, matchPalette, loadRefStats, applyGrade } from './lit/color.mjs';
 import { applyStyle } from './lit/style.mjs';
 import { warm, task, frameArena, POOL, THREADS } from './lit/pool.mjs';
-import { initGPU, gpuInfo, gpuResident, gpuReleaseResident } from './lit/gpu.mjs';
+import { initGPU, gpuInfo, gpuResident, gpuReleaseResident, rasterWanted } from './lit/gpu.mjs';
+import { treeToGeometry } from './lit/raster-geom.mjs';
+import { initRasterGPU, rasterize, renderLayers } from './lit/gpu-raster.mjs';
 
 export { LIGHT_PRESETS, STYLE_TYPES, TONEMAPS, resolveLighting, resolveStyle, effectsSummary } from './lit/params.mjs';
 export { gauss } from './lit/filters.mjs';
@@ -54,6 +56,14 @@ export async function renderPasses(scene, t = 0, { width = scene.width, states, 
   await probeRaster();
   // сцена уходит в воркеры ссылкой на JSON в общей памяти (sharedScene): без копии строки на каждый проход
   const base = { shared: POOL ? sharedScene(scene) : null, scene: POOL ? null : scene, t, width, states, raw, raster: capabilities.png, candidates: capabilities.candidates };
+  if (raw && rasterWanted() && !rasterFailed && await initRasterGPU()) {
+    try { return await gpuPasses(scene, list, base); } catch (e) {
+      rasterFailed = true;
+      process.stderr.write(`[kontur] растеризатор GPU выключен, проходы — через resvg: ${e.message}
+`);
+    }
+  }
+  lastRaster = 'cpu';
   const run = (mode, solidOK) => {
     const local = async () => (await passTask({ ...base, scene, mode, solidOK })).result;
     // воркер не смог (сцена не переносится в JSON, упал воркер) — проход в главном потоке
@@ -70,6 +80,42 @@ export async function renderPasses(scene, t = 0, { width = scene.width, states, 
   if (!raw) for (const m of list) out[m] = Buffer.from(out[m].buffer, out[m].byteOffset, out[m].byteLength);
   return out;
 }
+/* ---------- растеризатор проходов на видеокарте (KONTUR_GPU=raster, прототип) ---------- */
+/** Сверхвыборка сглаженных проходов (цель ss× крупнее; вместе с MSAA 4× — ss²·4 выборок на пиксель). */
+const RASTER_SS = Math.max(1, Math.min(4, +(process.env.KONTUR_RASTER_SS || 2) | 0));
+let rasterFailed = false, lastRaster = 'cpu';
+/** Чем растеризованы проходы последнего кадра: 'gpu' | 'cpu' (для stats). */
+export const lastPassRaster = () => lastRaster;
+/**
+ * Проходы на видеокарте: вычисление сцены и геометрия (контуры, треугольники) — в воркерах пула параллельно,
+ * растеризация — на GPU по очереди, по мере готовности геометрии. Результат — RGBA, как у svgToRGBA.
+ */
+async function gpuPasses(scene, list, base) {
+  const out = {}, geoms = {};
+  // сначала геометрия всех проходов (воркеры), затем растеризация по очереди: ожидание mapAsync в Dawn не должно
+  // пересекаться с приёмом сообщений воркеров: при наложении процесс падал в Dawn (0xC0000005 / 0xC0000409, раз в 10–30
+  // кадров); так — 120 кадров подряд без падений
+  await mapLimit(list, POOL ? THREADS : 2, async (mode) => {
+    const local = async () => (await geomTask({ ...base, scene, mode, ss: RASTER_SS })).result;
+    geoms[mode] = await task(import.meta.url, 'geomTask', { ...base, mode, ss: RASTER_SS }, local).catch(local);
+  });
+  const layers = Object.fromEntries(await Promise.all(list.map(async (m) => [m, await renderLayers(geoms[m].layers, geoms[m].width, geoms[m].height)])));
+  for (const mode of list) out[mode] = await rasterize(geoms[mode], layers[mode], { aa: geoms[mode].aa });
+  lastRaster = 'gpu';
+  return out;
+}
+/** Геометрия прохода mode для растеризатора GPU (raster-geom.mjs). Задача воркера пула. */
+export async function geomTask({ scene, shared, t, width, states, mode, ss }) {
+  if (!scene) scene = sceneOf(shared);
+  let tree = evaluate(scene, t, { width, states, mode: mode === 'color' ? undefined : mode, cache: true });
+  const bg = mode === 'color' ? null : modeInfo(mode).bg;
+  if (bg) tree = dropUnderBg(tree, bg).tree;
+  const crisp = tree.attrs['shape-rendering'] === 'crispEdges';
+  const g = treeToGeometry(tree, { ss: crisp ? 1 : ss });
+  g.aa = !crisp;
+  return { result: g, transfer: [g.verts.buffer, g.items.buffer, g.paints.buffer, g.stops.buffer] };
+}
+
 /** Размер прохода: RGBA-картинки или PNG (заголовок IHDR). */
 const imageSize = (im, raw) => (raw ? { width: im.width, height: im.height } : { width: readU32(im, 16), height: readU32(im, 20) });
 const readU32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
@@ -261,7 +307,7 @@ async function litFrame(scene, t, opts, arena) {
     ...(P ? { paint: true } : {}), ...(AE ? { aerial: true } : {}), ...(tmo ? { tonemap: tmo } : {}), ...(st.grade?.matchRef ? { matchRef: st.grade.matchRef.src } : {}),
     ...(st.ao?.mode === 'gtao' ? { ao: 'gtao' } : {}), ...(contact ? { contactShadows: true } : {}), ...(st.gi?.bounces > 1 ? { giBounces: st.gi.bounces } : {}),
     ...(dofInfo ? { dofFocus: +dofInfo.focus.toFixed(2) } : {}), ...(aeInfo ? { autoExposure: +aeInfo.k.toFixed(3) } : {}),
-    ...gpuStats(), effects: effectsSummary(st), passMs: tPass - t0, stageMs: stages, ms: Date.now() - t0 } }, opts.pngLevel);
+    ...gpuStats(), ...(lastRaster === 'gpu' && !opts.passes ? { raster: 'gpu' } : {}), effects: effectsSummary(st), passMs: tPass - t0, stageMs: stages, ms: Date.now() - t0 } }, opts.pngLevel);
   if (opts.debug) {
     const so = grayToRGBA(n, (i) => shadow[i] * ao[i]);
     const cell = Math.min(W, opts.debugWidth || 960);

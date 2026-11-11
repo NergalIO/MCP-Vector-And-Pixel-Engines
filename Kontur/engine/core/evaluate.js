@@ -174,7 +174,7 @@ export function evalNode(node, t, ctx, key, copy, extraScale = 1) {
       if (ctx.mode === 'ink') {
         stroke = surf?.ink ? '#000000' : 'none';
         if (surf?.ink) sw = surf.sw ?? (hasStroke ? sw : 2);
-      } else if (hasStroke && (hasFill || surf?.base || ctx.mode === 'cover')) {
+      } else if (hasStroke && (hasFill || surf?.base || ctx.mode === 'cover' || ctx.mode === 'matId')) {
         stroke = (hasFill ? fc : dataPaint(ctx, surf, opAcc * pa(rawStroke))) || 'none';
       } else stroke = 'none';
     } else {

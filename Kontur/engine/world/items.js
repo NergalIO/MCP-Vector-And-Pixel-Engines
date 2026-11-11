@@ -75,14 +75,14 @@ export function checkWorldItem(d) {
 export const WORLD_ITEMS = {
   box: { doc: 'коробка (дно видно снизу)', params: { x: 'range!', y: 'range=[0,1]', z: 'range!', color: 'color=stone', mats: 'mats — front|back|left|right|top|bottom|side|all', top: 'color', sides: 'color', spec: 'num', emissive: 'color', occ: 'bool' },
     build: (S, d, { mats }) => box(S, d.x[0], d.x[1], d.y?.[0] ?? 0, d.y?.[1] ?? 1, d.z[0], d.z[1], col(d.color) || C.stone, { mats: mats(d.mats), top: col(d.top), sides: col(d.sides), spec: d.spec, em: d.emissive, key: d.key, occ: d.occ, name: d.name }) },
-  house: { doc: 'дом: коробка с фасадом, крыша черепицей, окна и двери', params: { x: 'range!', z: 'range!', h: 'num=8', y0: 'num=0', color: 'color=plaster', roof: 'color=roof', mat: 'enum:plaster|stone|brick|none=plaster', ridge: 'enum:z — конёк вглубь (иначе вдоль X)', roofType: 'enum:flat|gable|hip|shed=gable', roofH: 'num=1.6', facades: 'list=["front","left","right"]', doorAt: 'num — положение двери на фасаде, м', doorColor: 'color', shut: 'color — ставни', plinth: 'num', chimney: 'num — 0..1 вдоль дома', pipe: 'str/bool — "end" — у правого края', litP: 'num=0.25 — доля горящих окон', skip: 'any', sides: 'color' },
-    build: (S, d) => house(S, d.x[0], d.x[1], d.z[0], d.z[1], d.h ?? 8, { ...d, col: col(d.color), roof: col(d.roof), shut: col(d.shut), doorCol: col(d.doorColor), sides: col(d.sides) }) },
+  house: { doc: 'дом: коробка с фасадом, крыша черепицей, окна и двери', params: { x: 'range!', z: 'range!', h: 'num=8', y0: 'num=0', color: 'color=plaster', roof: 'color=roof', mat: 'enum:plaster|stone|brick|none=plaster', ridge: 'enum:z — конёк вглубь (иначе вдоль X)', roofType: 'enum:flat|gable|hip|shed=gable', roofH: 'num=1.6', facades: 'list=["front","left","right"]', doorAt: 'num — положение двери на фасаде, м', doorColor: 'color', shut: 'color — ставни', plinth: 'num', chimney: 'num — 0..1 вдоль дома', pipe: 'str/bool — "end" — у правого края', litP: 'num=0.25 — доля горящих окон', skip: 'any', sides: 'color', tiles: 'enum:tile|barrel=tile — черепица скатов: плоская или канальная', tileW: 'num=0.24 — шаг канальной черепицы (устья на свесе)', eave: 'bool — объёмный свес: подшивка, карниз, торцы скатов, коньковая черепица', cornice: 'color — карниз и подшивка свеса', roofPmat: 'str — попиксельный материал крыши (иначе — pmat дома)' },
+    build: (S, d) => house(S, d.x[0], d.x[1], d.z[0], d.z[1], d.h ?? 8, { ...d, col: col(d.color), roof: col(d.roof), shut: col(d.shut), doorCol: col(d.doorColor), sides: col(d.sides), cornice: col(d.cornice) }) },
   cyl: { doc: 'цилиндр (гладкая нормаль)', params: { X: 'num!', Z: 'num!', r: 'num=0.3', y: 'range=[0,1]', color: 'color=stone', top: 'color', bands: 'num — шаг полос, м', n: 'int=16', spec: 'num', occ: 'bool' },
     build: (S, d) => cyl(S, d.X, d.Z, d.r ?? 0.3, d.y?.[0] ?? 0, d.y?.[1] ?? 1, col(d.color) || C.stone, { n: d.n, top: col(d.top), bands: d.bands, spec: d.spec, key: d.key, occ: d.occ, name: d.name }) },
   disc: { doc: 'плоский эллипс: лужи, люки, ковры', params: { X: 'num!', Y: 'num=0.003', Z: 'num!', rx: 'num=0.5', rz: 'num', color: 'color=iron', spec: 'num', base: 'bool', ink: 'bool', wob: 'bool', normal: 'vec3', opacity: 'num', emissive: 'color' },
     build: (S, d) => S.item(d.key ?? d.Z, [disc(S, d.X, d.Y ?? 0.003, d.Z, d.rx ?? 0.5, d.rz ?? d.rx ?? 0.5, col(d.color) || C.iron, { spec: d.spec, base: d.base, ink: d.ink, wob: d.wob, n3: d.normal && norm(d.normal), op: d.opacity, em: d.emissive })], { name: d.name || 'disc' }) },
-  stairs: { doc: 'лестница вдоль Z', params: { x: 'range!', z: 'range!', h: 'num=2', y0: 'num=0', steps: 'int', color: 'color=stoneHi', mat: 'mat=stone', jitter: 'bool' },
-    build: (S, d) => stairs(S, d.x[0], d.x[1], d.z[0], d.z[1], d.h ?? 2, col(d.color) || C.stoneHi, { steps: d.steps, mat: d.mat, y0: d.y0, jitter: d.jitter }) },
+  stairs: { doc: 'лестница вдоль Z', params: { x: 'range!', z: 'range!', h: 'num=2', y0: 'num=0', steps: 'int', color: 'color=stoneHi', mat: 'mat=stone', jitter: 'bool', top: 'color — проступи (иначе color)', nosing: 'num — свес проступи, м', joints: 'num — шаг швов подступёнка, м' },
+    build: (S, d) => stairs(S, d.x[0], d.x[1], d.z[0], d.z[1], d.h ?? 2, col(d.color) || C.stoneHi, { steps: d.steps, mat: d.mat, y0: d.y0, jitter: d.jitter, top: col(d.top), nosing: d.nosing, joints: d.joints, key: d.key }) },
   ground: { doc: 'земля (горизонтальная грань)', params: { x: 'range!', z: 'range!', y: 'num=0', color: 'color=cobble', mat: 'mat=cobble — false — гладкая (фактура — pmat)', matOpt: 'obj', maxZ: 'num=26', spec: 'num=0.25' },
     build: (S, d) => {
       const c = col(d.color), y = d.y ?? 0, [x0, x1] = d.x, [z0, z1] = d.z;
@@ -231,13 +231,13 @@ function profileOf(d) {
 const ON = 'face! — {wall:[x0,x1,z,h]} | {ps:[…]} | {o,u,v,w,h,n}';
 const onFace = (kind, doc, params) => ({ doc, params: { on: ON, a: 'num — по грани, м', b: 'num', ...params }, build: (S, d, { frameFrom }) => {
   const fr = frameFrom(d.on);
-  const pr = kind === 'window' ? windowPrims(S, fr, d.a ?? 0, d.b ?? 1, d.w ?? 0.84, d.h ?? 1.2, { lit: d.lit, shut: col(d.shut), box: d.box })
+  const pr = kind === 'window' ? windowPrims(S, fr, d.a ?? 0, d.b ?? 1, d.w ?? 0.84, d.h ?? 1.2, { lit: d.lit, shut: col(d.shut), box: d.box, ajar: d.ajar })
     : kind === 'door' ? doorPrims(S, fr, d.a ?? 0, d.w ?? 1.1, d.h ?? 2.1, col(d.color) || C.wood)
       : kind === 'pipe' ? pipePrims(S, fr, d.a ?? 0.25, d.b ?? 0, d.h ?? fr.h)
         : ivy(S, fr, d.a ?? 0, d.b ?? 0, d.w ?? 1.5, d.h ?? 3, d.density ?? 80);
   S.item(d.key ?? fr.z - 0.01, pr, { name: d.name || kind });
 } });
-WORLD_ITEMS.window = onFace('window', 'окно с наличником, переплётом, ставнями, ящиком цветов', { w: 'num=0.84', h: 'num=1.2', lit: 'bool', shut: 'color', box: 'bool' });
+WORLD_ITEMS.window = onFace('window', 'окно с наличником, переплётом, ставнями, ящиком цветов', { w: 'num=0.84', h: 'num=1.2', lit: 'bool', shut: 'color', box: 'bool', ajar: 'num=0 — угол ставней от стены, рад: петли у окна, дальняя кромка выступает' });
 WORLD_ITEMS.door = onFace('door', 'арочная дверь', { w: 'num=1.1', h: 'num=2.1', color: 'color=wood' });
 WORLD_ITEMS.pipe = onFace('pipe', 'водосточная труба', { h: 'num — длина (по умолчанию высота грани)' });
 WORLD_ITEMS.ivy = onFace('ivy', 'плющ', { w: 'num=1.5', h: 'num=3', density: 'int=80' });

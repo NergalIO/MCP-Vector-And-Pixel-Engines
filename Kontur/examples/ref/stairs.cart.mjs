@@ -214,10 +214,11 @@ reg('hydrangea', (S, d) => {
   const M = mapper(S, d), { Z0, P, m } = M, KZ = d.keyZ ?? Z0;
   const [px, pyB] = d.pot, pw = d.potW ?? 70, ph = d.potH ?? 67, p = P(px, pyB);
   const r = m(pw / 2);
-  lathe(S, p[0], p[2], [[r * 0.72, 0, 'c'], [r * 0.78, m(ph) * 0.1], [r * 0.95, m(ph) * 0.8], [r, m(ph) * 0.84, 'c'], [r * 1.06, m(ph) * 0.86], [r * 1.06, m(ph), 'c'], [r * 0.9, m(ph), 'c']], d.potColor || '#c8682e', { y0: p[1], key: KZ - 0.02, spec: 0.3, top: '#3a2a1a', rings: { ys: [p[1] + m(ph) * 0.84], color: '#8a3a1a' } });
+  lathe(S, p[0], p[2], [[r * 0.72, 0, 'c'], [r * 0.78, m(ph) * 0.1], [r * 0.95, m(ph) * 0.8], [r, m(ph) * 0.84, 'c'], [r * 1.06, m(ph) * 0.86], [r * 1.06, m(ph), 'c'], [r * 0.9, m(ph), 'c']], d.potColor || '#c8682e', { y0: p[1], key: KZ - 0.02, spec: d.potColor ? 0.15 : 0.04, pmat: d.potColor ? 'glaze' : 'terracotta', top: '#3a2a1a', rings: { ys: [p[1] + m(ph) * 0.84], color: '#8a3a1a' } }); // матовая глина (блик 0.3 давал пластик)
   const leaves = [], heads = [];
   for (const [x, y, rr] of d.leaves) leaves.push(...cluster(M, x, y, -0.05, rr, Math.round(rr * 1.6), ['#5a8a30', '#4a7a28', '#6a9a38', '#3a6420', '#7aa840'], 6.5, { flat: 0.5, ink: true, wob: 0.2 }));
-  const itL = S.item(KZ - 0.06, leaves, { name: 'hydrangea_leaves' });
+  // листва пропускает часть света (alpha < 1): тень пятнистая, а не сплошной гладкий шар
+  const itL = S.item(KZ - 0.06, leaves, { name: 'hydrangea_leaves', alpha: 0.65 });
   occluders(S, itL, d.leaves.map(([x, y, rr]) => [P(x, y, -0.05), m(rr)]), 0.75);
   const cols = d.flower || ['#e8a8d0', '#d898c8', '#c8a0e0', '#f0b8d8'];
   for (const [x, y, rr] of d.heads) {
@@ -225,6 +226,6 @@ reg('hydrangea', (S, d) => {
     heads.push(...M.ball(x, y, -0.1, rr, dark(c, 0.15), { flat: 0.1, ink: true }));
     heads.push(...cluster(M, x, y, -0.1 - m(rr) * 0.5, rr * 0.92, Math.round(rr * 1.6), [c, lite(c, 0.12), dark(c, 0.06)], rr * 0.24, { flat: 0.15 }));
   }
-  const itH = S.item(KZ - 0.12, heads, { name: 'hydrangea_heads' });
+  const itH = S.item(KZ - 0.12, heads, { name: 'hydrangea_heads', alpha: 0.75 });
   occluders(S, itH, d.heads.map(([x, y, rr]) => [P(x, y, -0.1), m(rr)]), 0.85);
 });

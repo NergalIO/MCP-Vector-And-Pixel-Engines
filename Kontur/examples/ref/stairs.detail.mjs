@@ -5,6 +5,25 @@ import { registerWorldItem, dark, lite, jit, rnd } from '../../engine/world3d.js
 const TAU = Math.PI * 2;
 const reg = (type, build) => registerWorldItem(type, { doc: type, build });
 
+/**
+ * Карта pxMap для створки, повёрнутой на петлях: точка в t = (x − hx)·k от петли уходит вдоль стены на t·cos(ang) и к
+ * камере на |t|·sin(ang); сдвиг слоя dz — по нормали створки. side — куда от петли лежит створка (±1 по x).
+ */
+function ajarMap(M, hx, ang, side) {
+  const { k, Z0 } = M, S = M.S, cs = Math.cos(ang), sn = Math.sin(ang);
+  const Rv = (v) => side > 0 ? [v[0] * cs + v[2] * sn, v[1], -v[0] * sn + v[2] * cs] : [v[0] * cs - v[2] * sn, v[1], v[0] * sn + v[2] * cs];
+  let N = Rv([0, 0, -1]);
+  const P = (x, y, dz = 0) => { const h = M.P(hx, y, 0), t = (x - hx) * k; return [h[0] + t * cs - N[0] * dz, h[1], Z0 - Math.abs(t) * sn - N[2] * dz]; };
+  const mid = P(hx + side * 5, 0);
+  const flip = !S.faces(N, mid) ? -1 : 1;
+  const fl = (v) => Rv(v).map((q, i) => (i === 1 ? q : q * flip));
+  N = N.map((q) => q * flip);
+  const flat = (pts, dz, alb, o = {}) => { const ps = pts.map(([x, y]) => P(x, y, dz)); return { t: 'poly', ps, alb, n: fl(o.n || [0, 0.08, -1]), pl: [...N, N[0] * ps[0][0] + N[1] * ps[0][1] + N[2] * ps[0][2]],
+    base: !o.bump, bump: !!o.bump, ink: o.ink ?? false, sw: M.pxw(o.sw ?? 0.01, Z0), spec: o.spec ?? 0.2, op: o.op ?? 1 }; };
+  const line = (x0, y0, x1, y1, dz, c, t, o = {}) => S.line(P(x0, y0, dz), P(x1, y1, dz), c, M.pxw(t, Z0), o);
+  return { ...M, P, flat, line };
+}
+
 export function pxMap(S, d) {
   const Z0 = d.Z, f = d.f ?? 2000, cx = d.cx ?? 950, gy = d.gy, k = Z0 / f;
   const P = (x, y, dz = 0) => [(x - cx) * k, (gy - y) * k, Z0 + dz];
@@ -13,13 +32,22 @@ export function pxMap(S, d) {
     base: !o.bump, bump: !!o.bump, ink: o.ink ?? false, sw: pxw(o.sw ?? 0.01, Z0 + dz), spec: o.spec ?? 0.2, op: o.op ?? 1, ...(o.em ? { em: o.em } : {}) });
   const rect = (x0, y0, x1, y1) => [[x0, y1], [x1, y1], [x1, y0], [x0, y0]];
   const line = (x0, y0, x1, y1, dz, c, t, o = {}) => S.line(P(x0, y0, dz), P(x1, y1, dz), c, pxw(t, Z0 + dz), o);
-  return { Z0, k, P, pxw, flat, rect, line };
+  return { S, Z0, k, P, pxw, flat, rect, line };
 }
 
-/** Ставня-жалюзи: прямоугольник [x0,y0,x1,y1] с рамкой и косыми ламелями. */
-function shutter(M, x0, y0, x1, y1, dz, c, out) {
+/**
+ * Ставня-жалюзи: прямоугольник [x0,y0,x1,y1] с рамкой и косыми ламелями. sw = {hx, ang} — приоткрыта: петли на кромке hx
+ * (у окна), дальняя кромка отходит от стены на угол ang; тогда в occ — четырёхугольник створки (тень на стену).
+ */
+function shutter(M, x0, y0, x1, y1, dz, c, out, sw = null, occ = null) {
+  if (sw?.ang) M = ajarMap(M, sw.hx, sw.ang, x0 + x1 - 2 * sw.hx > 0 ? 1 : -1);
   const { flat, rect, line } = M;
   out.push(flat(rect(x0, y0, x1, y1), dz, c, { ink: true, sw: 0.012, n: [0, 0.05, -1] }));
+  if (sw?.ang) { // торец у дальней кромки и тень
+    const xo = x0 + x1 - 2 * sw.hx > 0 ? x1 : x0;
+    out.push(line(xo, y0, xo, y1, dz, dark(c, 0.5), 0.035));
+    occ?.push([M.P(x0, y0, dz), M.P(x1, y0, dz), M.P(x1, y1, dz), M.P(x0, y1, dz)]);
+  }
   const b = Math.max(2, (x1 - x0) * 0.12);
   out.push(flat(rect(x0 + b, y0 + b, x1 - b, y1 - b), dz - 0.002, dark(c, 0.12), { bump: true }));
   for (let y = y0 + b + 4; y < y1 - b - 1; y += 5.5) {
@@ -57,10 +85,12 @@ reg('pxWin', (S, d) => {
   for (let i = 1; i < cols; i++) { const x = gx0 + ((gx1 - gx0) * i) / cols; out.push(flat(rect(x - fw / 2, gy0, x + fw / 2, gy1), -0.01, frame, { bump: true })); }
   for (let j = 1; j < rows; j++) { const y = gy0 + ((gy1 - gy0) * j) / rows; out.push(flat(rect(gx0, y - 1, gx1, y + 1), -0.01, frame, { bump: true })); }
   if (d.sill !== false) out.push(flat(rect(x0 - tr - 4, y1 + 1, x1 + tr + 4, y1 + 6), -0.03, d.sillColor || '#d8c4a8', { ink: true, sw: 0.008, n: [0, 0.8, -1] }));
-  const sc = d.shut;
-  if (sc && d.shutL) shutter(M, d.shutL[0], y0 - 3, d.shutL[1], y1 + 2, -0.02, sc, out);
-  if (sc && d.shutR) shutter(M, d.shutR[0], y0 - 3, d.shutR[1], y1 + 2, -0.02, sc, out);
-  S.item(d.key ?? d.Z - 0.03, out, { name: 'pxWin' });
+  // ставни приоткрыты (ajar, рад; 0 — плашмя на стене): петли у окна, дальние кромки отходят от стены и бросают тень
+  const sc = d.shut, aj = d.ajar ?? 0.38, occ = [];
+  if (sc && d.shutL) shutter(M, d.shutL[0], y0 - 3, d.shutL[1], y1 + 2, -0.02, sc, out, { hx: d.shutL[1], ang: aj }, occ);
+  if (sc && d.shutR) shutter(M, d.shutR[0], y0 - 3, d.shutR[1], y1 + 2, -0.02, sc, out, { hx: d.shutR[0], ang: aj }, occ);
+  const it = S.item(d.key ?? d.Z - 0.03, out, { name: 'pxWin', force: occ.length > 0 });
+  for (const [a, b, c, e] of occ) { S.tri3([a, b, c], it); S.tri3([a, c, e], it); }
 });
 
 /** Отдельная ставня (окно за кадром или за листвой): {Z, gy, r:[x0,y0,x1,y1], color}. */

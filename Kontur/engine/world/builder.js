@@ -116,6 +116,7 @@ export function Scene({ W = 1920, H = 1080, hor, f, camH, dz = 0, cx, yaw, pitch
   };
   S.base = (ps, alb, n, pl, o = {}) => ({ t: 'poly', ps, alb, n, pl, base: true, ink: o.ink ?? true, spec: o.spec ?? 0.1, em: o.em, op: 1, sw: o.sw, ng: o.ng, geo: o.geo, holes: o.holes });
   S.det = (fr, ps, alb, o = {}) => ({ t: 'poly', ps, alb, n: o.n || fr.n, pl: fr.pl, bump: !!o.n || o.bump, base: !!o.solid, ink: o.ink || false, spec: o.spec ?? 0.1, em: o.em, op: o.op ?? 1, sw: o.sw });
-  S.line = (a, b, c, w, o = {}) => ({ t: 'line', a, b, col: c, w, ink: o.ink || false, op: o.op ?? 1 });
+  /** Линия; o.pl — плоскость [nx,ny,nz,d], на которой она лежит: тогда линия — тело в проходах (свет и тень по своей грани, а не по тому, что за ней). */
+  S.line = (a, b, c, w, o = {}) => ({ t: 'line', a, b, col: c, w, ink: o.ink || false, op: o.op ?? 1, ...(o.pl ? { lpl: o.pl } : {}) });
   return S;
 }
