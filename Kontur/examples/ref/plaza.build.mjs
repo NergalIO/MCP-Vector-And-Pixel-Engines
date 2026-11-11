@@ -359,8 +359,8 @@ const items = [
   { type: 'pzIvy', key: ZBk - 0.2, per: 5, lr: 0.06, spread: 0.3, pts: [[-2.25, 8.2, ZBk - 0.03, 3.4], [-2.5, 8.2, ZBk - 0.03, 3.8], [-2.75, 8.0, ZBk - 0.03, 2.8]] },
 
   /* ---------- левый дом: арка к крыльцу, окна, плющ ---------- */
-  { type: 'box', key: ZBk + 0.7, x: [-14, XL], y: [0, 12], z: [8.4, ZBk + 0.5], color: OCHRE, pmat: 'plaster' },
-  { type: 'box', key: ZBk + 0.65, x: [XL - 0.1, XL + 0.06], y: [3.72, 3.88], z: [8.4, ZBk + 0.5], color: STONE_HI, pmat: 'stone' },
+  { type: 'box', key: ZBk + 0.7, x: [-14, XL], y: [0, 12], z: [2.0, ZBk + 0.5], color: OCHRE, pmat: 'plaster' }, // от z 2 (за кадром): тень на передний край двора
+  { type: 'box', key: ZBk + 0.65, x: [XL - 0.1, XL + 0.06], y: [3.72, 3.88], z: [2.0, ZBk + 0.5], color: STONE_HI, pmat: 'stone' },
   { type: 'archDoor', on: FLw, a: 13.0 - 8.5, w: 2.4, spring: 2.25, color: '#dcbc9c', ring: 0.36, dark: '#3a2622', reveal: '#7a5444', depth: 0.9, stones: 15, key: 12.9 },
   { type: 'lantern', p: [XL + 0.5, 3.0, 12.2], s: 0.75, wall: -1, key: 12.0, radius: 3.5, energy: 1.2 },
   // окна: первый ряд над аркой и лестницей, второй — у верха кадра
@@ -385,7 +385,7 @@ const items = [
   hyd(-4.42, 21.65, { r: 0.15, flower: ['#b89ae0', '#c8a8e8', '#a888d8', '#d8b0e0'] }),
 
   /* ---------- мост: арки, карниз, пол, балюстрада ---------- */
-  { type: 'box', key: ZB + 0.02, x: [-4.66, -4.27], y: [0, 3.32], z: [ZB, ZBk], color: BRIDGE, pmat: 'ashlarB' },
+  { type: 'box', key: ZB + 0.02, x: [-4.66, -4.27], y: [0, 3.32], z: [ZB, ZB + 0.62], color: BRIDGE, pmat: 'ashlarB' }, // глубина = глубине ниши: боковая грань не видна в проёме
   { type: 'box', key: ZB - 0.07, x: [-4.66, -4.24], y: [0, 3.32], z: [ZB - 0.06, ZB + 0.02], color: STONE_HI, pmat: 'stone' }, // пилястра у ниши-алтаря
   { type: 'arch', key: ZB, x: [-4.05, -1.65], z: ZB, spring: 1.82, thick: 0.62, margin: 0.22, top: 3.32, color: BRIDGE, back: null, stones: 13, stoneColor: '#e6ccb2', pmat: 'ashlarB' },
   { type: 'arch', key: ZB, x: [-1.23, 1.42], z: ZB, spring: 1.7, thick: ZBk - ZB, margin: 0.2, top: 3.32, color: BRIDGE, back: null, stones: 13, stoneColor: '#e6ccb2', pmat: 'ashlarB' },
