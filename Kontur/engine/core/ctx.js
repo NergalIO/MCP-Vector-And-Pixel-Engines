@@ -21,6 +21,7 @@ export class Ctx {
     this.surfCur = null; this.opCur = 1; this.scaleCur = 1; this.linCur = [1, 0, 0, 1];
     this.relief = { ...RELIEF_DEFAULT, ...(scene.relief || {}), ...(opts.relief || {}) };
     this.inClip = 0;
+    this.evals = 0; // вычислений узлов в этом кадре (предел — MAX_EVAL_NODES в evaluate.js)
     this.defIds = new Set();
     this.recorders = [];
     this.cache = !!opts.cache;

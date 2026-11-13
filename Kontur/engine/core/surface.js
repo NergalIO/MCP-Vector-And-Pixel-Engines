@@ -237,6 +237,8 @@ export function dataPaint(ctx, s, op) {
     if (m === 'ink') return opaque ? '#ffffff' : null;
     if (m === 'cover') return half ? '#ffffff' : null;
     if (m === 'emissive' || ctx.maskTag) return opaque ? '#000000' : null;
+    // без материала: перекрывает материал поверхности за собой (иначе фактура стены ложится на ножки скамьи)
+    if (m === 'matId') return half ? encodeMatId(0) : null;
     return null;
   }
   switch (m) {
@@ -246,7 +248,8 @@ export function dataPaint(ctx, s, op) {
     case 'emissive': return s.geo ? null : s.emissive && s.emissive !== 'none' ? s.emissive : s.base || opaque ? '#000000' : null;
     case 'ink': return s.base && !s.geo ? '#ffffff' : null;
     case 'cover': return s.sky || s.geo ? null : s.base || half ? '#ffffff' : null;
-    case 'matId': return s.base || (s.bump && half) ? encodeMatId(s.mat ? ctx.matIdx.get(s.mat) || 0 : 0) : null;
+    // деталь пишет свой материал (унаследованный от предмета или 0): фактура чужой поверхности за ней не просвечивает
+    case 'matId': return !s.geo && !s.sky && (s.base || half) ? encodeMatId(s.mat ? ctx.matIdx.get(s.mat) || 0 : 0) : null;
     default: return s.geo ? null : isMaskTag(s, ctx.maskTag) ? '#ffffff' : s.base || opaque ? '#000000' : null;
   }
 }

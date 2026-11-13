@@ -3,6 +3,7 @@ import { inflateSync, deflateSync } from 'node:zlib';
 import { renderSVG } from '../engine/kontur.js';
 import { svgToRGBA } from './render.mjs';
 import { readSrc, toDataURI } from './files.mjs';
+import { checkRaster } from './limits.mjs';
 import { Y3, Y601, unorm8, rgb, tileImages, grayToRGBA } from './lit/util.mjs';
 
 /* ============================== PNG ============================== */
@@ -32,9 +33,12 @@ export function decodePNG(buf) {
   }
   if (inter) throw new Error('PNG с interlace не поддерживается');
   if (depth !== 8 && !(ctype === 3 && depth <= 8)) throw new Error(`PNG ${depth} бит/канал не поддерживается`);
-  const raw = inflateSync(Buffer.concat(idat));
   const ch = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[ctype];
+  if (!ch) throw new Error(`PNG: неизвестный тип цвета ${ctype}`);
+  checkRaster(w, h, 'PNG');
   const bpp = Math.max(1, (ch * depth) >> 3), stride = Math.ceil((w * ch * depth) / 8);
+  // распакованный размер известен из заголовка: больше — «бомба» сжатия, распаковка обрывается, а не съедает память
+  const raw = inflateSync(Buffer.concat(idat), { maxOutputLength: h * (stride + 1) });
   const cur = new Uint8Array(stride), prev = new Uint8Array(stride);
   const out = new Uint8Array(w * h * 4);
   let rp = 0;
@@ -324,7 +328,6 @@ export function heightToNormalSrc(scene, baseDir) {
     const strength = p.heightStrength ?? 3, key = `${strength}|${p.heightSrc}`;
     let uri = hnCache.get(key);
     if (uri === undefined) {
-      uri = null;
       try {
         const src = String(p.heightSrc);
         const buf = readSrc(src, baseDir);

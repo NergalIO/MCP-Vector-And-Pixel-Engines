@@ -407,8 +407,20 @@ export function disc(S, X, Y, Z, rx, rz, c, o = {}) {
 /** Лестница вдоль Z: ступени-коробки без перекрытий (каждая на своём отрезке глубины). */
 export function stairs(S, x0, x1, z0, z1, h, c = C.stoneHi, o = {}) {
   const n = o.steps || Math.max(2, Math.round(h / 0.21));
+  const y0 = o.y0 ?? 0, rise = h / n, nos = o.nosing || 0;
   for (let i = 0; i < n; i++) {
-    const za = z0 + ((z1 - z0) * i) / n, zb = z0 + ((z1 - z0) * (i + 1)) / n, y = (o.y0 ?? 0) + (h * (i + 1)) / n;
-    box(S, x0, x1, o.y0 ?? 0, y, za, zb, o.jitter === false ? c : jit(c, 0.05), { key: za, name: 'step', mats: o.mat === 'none' ? {} : { front: [o.mat || 'stone', c, { bh: 0.2 }], top: null } });
+    const za = z0 + ((z1 - z0) * i) / n, zb = z0 + ((z1 - z0) * (i + 1)) / n, y = y0 + rise * (i + 1);
+    const cc = o.jitter === false ? c : jit(c, 0.05), top = o.top ? (o.jitter === false ? o.top : jit(o.top, 0.04)) : null;
+    // key — общий ключ марша (ступени по порядку, дальние раньше): марш между щёк рисуется поверх их внутренних граней
+    const k = o.key != null ? o.key + i * 1e-4 : za;
+    box(S, x0, x1, y0, y, za, zb, cc, { key: k, name: 'step', ...(top ? { top } : {}), mats: o.mat === 'none' ? {} : { front: [o.mat || 'stone', c, { bh: 0.2 }], top: null } });
+    const it = S.items[S.items.length - 1];
+    // швы между камнями подступёнка: вертикальные, вразбежку по рядам
+    if (o.joints && it) {
+      const fr = S.frame([x0, y - rise, za], [1, 0, 0], [0, 1, 0], x1 - x0, rise, [0, 0, -1]), jc = dark(c, 0.3);
+      for (let a = o.joints * (i % 2 ? 0.5 : 0.95); a < x1 - x0 - 0.1; a += o.joints) it.prims.push(S.det(fr, fr.rect(a, 0.01, 0.014, rise - nos - 0.015), jc, {}));
+    }
+    // свес проступи: тонкая плита выступает над подступёнком и бросает на него тень
+    if (nos > 0) box(S, x0, x1, y - Math.min(0.04, rise * 0.3), y, za - nos, za + 0.02, top || cc, { key: o.key != null ? k - 5e-5 : za - nos, name: 'step_nosing', ...(top ? { top } : {}) });
   }
 }

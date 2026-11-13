@@ -69,6 +69,8 @@ export function toNodes(S, opts = {}) {
       const props = { x1: r1(x1), y1: r1(y1), x2: r1(x2), y2: r1(y2), stroke: p.col, strokeWidth: +p.w.toFixed(2), lineCap: 'round' };
       if (p.op < 1) props.opacity = p.op;
       if (p.ink) props.surface = { ink: true, sw: +p.w.toFixed(2) };
+      // линия на грани (S.line …, { pl }): тело в проходах — освещается по своей грани, а не по тому, что за ней
+      if (p.lpl) props.surface = { ...(props.surface || {}), plane: p.lpl.map(r4), normal: p.lpl.slice(0, 3).map(r4), base: true };
       return { id, type: 'line', parent, props };
     }
     let d = polyD(p.ps);

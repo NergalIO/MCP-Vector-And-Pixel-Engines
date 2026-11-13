@@ -1,12 +1,13 @@
 // Холст: плеер, масштаб и панорама, попадание щелчком, рамки объектов, разбор событий мыши для инструментов.
-import { K, E, on, emit, node, ancestors, isLocked, screenM, applyPt } from './core.js';
+import { K, E, emit, node, ancestors, isLocked, screenM, applyPt } from './core.js';
 
 const $ = (id) => document.getElementById(id);
 export const stage = $('stage'), canvasBox = $('canvas'), ovSvg = $('ov');
-let fitted = false, pan = null, space = { down: false, used: false };
+const space = { down: false, used: false };
+let fitted = false, pan = null;
 
 export function initView() {
-  E.canvasRender = E.canvasRender ?? (/[?&]renderer=canvas/.test(location.search) || readPref('kontur.renderer') === 'canvas');
+  E.canvasRender = E.canvasRender ?? (/[?&]renderer=canvas\b/.test(location.search) || readPref('kontur.renderer') === 'canvas');
   E.player = new K.Player(canvasBox, E.scene, { autoplay: false, states: E.states, renderer: makeRenderer() });
   E.player.on((t) => { E.t = t; emit('frame'); });
   new ResizeObserver(() => (fitted ? layout() : fit())).observe(stage);

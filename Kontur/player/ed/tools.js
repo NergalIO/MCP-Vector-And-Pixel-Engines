@@ -317,7 +317,7 @@ const direct = {
     if (D.kind === 'amarq') { E.marquee = [D.sx, D.sy, ev.sx, ev.sy]; requestOverlay(); return; }
     if (D.kind !== 'pts') return DRAG[D.kind]?.move(ev);
     if (!D.moved) { if (dist([ev.sx, ev.sy], [D.sx, D.sy]) < 2) return; D.moved = true; begin(); }
-    let d = [ev.sx - D.sx, ev.sy - D.sy];
+    const d = [ev.sx - D.sx, ev.sy - D.sy];
     if (ev.e.shiftKey) { if (Math.abs(d[0]) > Math.abs(d[1])) d[1] = 0; else d[0] = 0; }
     for (const b of D.base) {
       const dl = applyPt(b.mi, d), subs = clonePts(b.subs), id = b.n.id;

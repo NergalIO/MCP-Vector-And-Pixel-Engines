@@ -10,10 +10,10 @@ import { MODIFIERS } from './modifiers.js';
 export function validateStructure(scene, inner = false) {
   const errs = [];
   if (!scene || !Array.isArray(scene.nodes)) return ['scene.nodes должен быть массивом'];
-  for (const k of ['width', 'height', 'duration']) if (!(scene[k] > 0)) errs.push(`scene.${k} должен быть > 0`);
+  for (const k of ['width', 'height', 'duration']) if (typeof scene[k] !== 'number' || !(scene[k] > 0) || scene[k] === Infinity) errs.push(`scene.${k} должен быть числом > 0`);
   const ids = new Set();
   for (const n of scene.nodes) {
-    if (!n.id) errs.push('Узел без id');
+    if (typeof n.id !== 'string' || !n.id) errs.push(n.id == null || n.id === '' ? 'Узел без id' : `id узла должен быть строкой: ${JSON.stringify(n.id)}`);
     if (ids.has(n.id)) errs.push(`Повтор id ${n.id}`);
     ids.add(n.id);
     if (!NODE_TYPES.includes(n.type)) errs.push(`${n.id}: неизвестный тип ${n.type}`);
@@ -29,7 +29,8 @@ export function validateStructure(scene, inner = false) {
   checkMarkers(scene, errs);
   const cn = new Set();
   for (const c of scene.clips || []) {
-    if (!c.name) errs.push('Клип без имени');
+    if (!c.name || typeof c.name !== 'string') errs.push('Клип без имени');
+    if (typeof c.start !== 'number' || typeof c.end !== 'number') { errs.push(`Клип ${c.name}: start и end должны быть числами`); continue; }
     if (cn.has(c.name)) errs.push(`Повтор имени клипа ${c.name}`);
     cn.add(c.name);
     if (!(c.end > c.start)) errs.push(`Клип ${c.name}: end должен быть больше start`);

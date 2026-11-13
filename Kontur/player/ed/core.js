@@ -271,7 +271,8 @@ export function insertClones(list, parent, after = null) {
   const inList = new Set(list.map((n) => n.id)), map = new Map();
   const taken = new Set(E.scene.nodes.map((n) => n.id));
   for (const n of list) {
-    let id = n.id.replace(/_\d+$/, ''), i = 2, cand = id;
+    const id = n.id.replace(/_\d+$/, '');
+    let i = 2, cand = id;
     while (taken.has(cand)) cand = `${id}_${i++}`;
     taken.add(cand); map.set(n.id, cand);
   }
@@ -316,4 +317,3 @@ export function toast(msg, bad = false) {
   el.textContent = msg; el.className = bad ? 'bad' : ''; el.hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (el.hidden = true), bad ? 6000 : 2200);
 }
-export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);

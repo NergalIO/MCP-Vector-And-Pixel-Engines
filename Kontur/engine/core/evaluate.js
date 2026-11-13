@@ -27,7 +27,13 @@ function frameVals(fm, node, T, copy) {
   return e.v;
 }
 
+/**
+ * Предел вычислений узлов на один кадр. Реальные сцены — десятки тысяч (2.5D-площадь — около 30 тыс.), а вложенные
+ * repeat и экземпляры символов перемножаются (500 × 500 × 500 копий): без предела такой кадр съедает всю память.
+ */
+export const MAX_EVAL_NODES = 1e6;
 export function evalNode(node, t, ctx, key, copy, extraScale = 1) {
+  if (++ctx.evals > MAX_EVAL_NODES) throw new Error(`кадр: больше ${MAX_EVAL_NODES} вычислений узлов — вложенные repeat и экземпляры символов перемножаются; уменьшите count или вложенность (узел ${node.id})`);
   const p = node.props || {};
   // временное окно и локальное время
   if (p.inPoint != null && t < p.inPoint) return null;
@@ -37,6 +43,12 @@ export function evalNode(node, t, ctx, key, copy, extraScale = 1) {
   if (rep && rep.count > 1 && !ctx.inRepeat.has(node)) {
     const out = { tag: 'g', attrs: { 'data-node': ctx.symStack.length ? null : node.id }, children: [] };
     const n = Math.min(500, Math.round(rep.count));
+    // вложенные repeat перемножаются: произведение больше предела — ошибка сразу, до выделения копий
+    const mul = (ctx.repMul || 1) * n;
+    if (mul > MAX_EVAL_NODES) throw new Error(`repeat: вложенные повторы дают ${mul} копий узла ${node.id} (предел ${MAX_EVAL_NODES}) — уменьшите count или вложенность`);
+    const mul0 = ctx.repMul;
+    ctx.repMul = mul;
+    try {
     for (let i = 0; i < n; i++) {
       const ti = t - (rep.delay ?? 0) * (rep.reverse ? n - 1 - i : i);
       const tr = [];
@@ -50,6 +62,7 @@ export function evalNode(node, t, ctx, key, copy, extraScale = 1) {
       ctx.inRepeat.delete(node);
       if (child) out.children.push({ tag: 'g', attrs: { transform: tr.join(' ') || null, opacity: op < 1 ? fmt(op) : null }, children: [child] });
     }
+    } finally { ctx.repMul = mul0; }
     return out;
   }
   const T = lt;
@@ -174,7 +187,7 @@ export function evalNode(node, t, ctx, key, copy, extraScale = 1) {
       if (ctx.mode === 'ink') {
         stroke = surf?.ink ? '#000000' : 'none';
         if (surf?.ink) sw = surf.sw ?? (hasStroke ? sw : 2);
-      } else if (hasStroke && (hasFill || surf?.base || ctx.mode === 'cover')) {
+      } else if (hasStroke && (hasFill || surf?.base || ctx.mode === 'cover' || ctx.mode === 'matId')) {
         stroke = (hasFill ? fc : dataPaint(ctx, surf, opAcc * pa(rawStroke))) || 'none';
       } else stroke = 'none';
     } else {

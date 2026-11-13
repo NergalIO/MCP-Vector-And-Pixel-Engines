@@ -1,5 +1,6 @@
 // Таймлайн: воспроизведение, клипы, дорожки ключей (перетаскивание, плавность, удаление), автоключ.
-import { K, E, on, emit, node, ancestors, begin, preview, commit, edit, select, esc, fmtN, uid, toast } from './core.js';
+import { K, E, on, node, ancestors, begin, preview, commit, edit, select, fmtN, toast } from './core.js';
+import { html, setHTML } from './html.js';
 
 const $ = (id) => document.getElementById(id);
 const tracks = $('tracks');
@@ -34,7 +35,7 @@ $('addclip').onclick = () => {
 const uid2 = (b) => { let i = 1; while ((E.scene.clips || []).some((c) => c.name === b + i)) i++; return b + i; };
 export function syncClips() {
   const sel = $('clip'), cur = E.player.clip?.name || sel.value;
-  sel.innerHTML = '<option value="">Вся шкала</option>' + (E.scene.clips || []).map((c) => `<option value="${esc(c.name)}">${esc(c.name)} · ${c.start}–${c.end}s</option>`).join('');
+  setHTML(sel, html`<option value="">Вся шкала</option>${(E.scene.clips || []).map((c) => html`<option value="${c.name}">${c.name} · ${c.start}–${c.end}s</option>`)}`);
   const ok = (E.scene.clips || []).some((c) => c.name === cur);
   sel.value = ok ? cur : '';
   try { E.player.setClip(ok ? cur : null); } catch { E.player.setClip(null); }
@@ -67,7 +68,7 @@ function rows() {
 }
 function render() {
   const D = E.scene.duration || 1, pct = (t) => (Math.max(0, Math.min(D, t)) / D) * 100 + '%';
-  tracks.innerHTML = '';
+  tracks.replaceChildren();
   const lane = (label, cls = '', lcls = '') => {
     const l = document.createElement('div'); l.className = 'lbl ' + lcls; l.textContent = label; l.title = label.trim();
     const ln = document.createElement('div'); ln.className = 'lane ' + cls;
@@ -77,13 +78,13 @@ function render() {
   };
   const [, ruler] = lane('', 'ruler');
   const step = D <= 2 ? 0.25 : D <= 6 ? 0.5 : D <= 14 ? 1 : D <= 40 ? 2 : 5;
-  for (let t = 0; t <= D + 1e-9; t += step) { const k = document.createElement('div'); k.className = 'tick'; k.style.left = pct(t); k.innerHTML = `<span>${+t.toFixed(2)}</span>`; ruler.append(k); }
+  for (let t = 0; t <= D + 1e-9; t += step) { const k = document.createElement('div'); k.className = 'tick'; k.style.left = pct(t); setHTML(k, html`<span>${+t.toFixed(2)}</span>`); ruler.append(k); }
   for (const c of E.scene.clips || []) {
     const b = document.createElement('div');
     b.className = 'cliprange' + (E.player.clip?.name === c.name ? ' on' : '');
     b.dataset.clip = c.name;
     b.style.left = pct(c.start); b.style.width = ((Math.min(D, c.end) - c.start) / D) * 100 + '%';
-    b.innerHTML = `<span class="eg" data-edge="start" style="left:0"></span>${esc(c.name)}<span class="eg" data-edge="end" style="right:0"></span>`;
+    setHTML(b, html`<span class="eg" data-edge="start" style="left:0"></span>${c.name}<span class="eg" data-edge="end" style="right:0"></span>`);
     b.title = `${c.name}: ${c.start}–${c.end} с · тяните края или весь клип`;
     b.onpointerdown = (e) => clipDown(e, c, b);
     ruler.append(b);
@@ -182,7 +183,7 @@ function easeMenu(x, y) {
   const m = document.createElement('div');
   m.className = 'menu'; m.id = 'menu';
   const names = ['linear', 'hold', 'inOutCubic', 'inOutSine', 'outCubic', 'inCubic', 'outBack', 'inBack', 'inOutBack', 'outElastic', 'outBounce', ...Object.keys(K.easings).filter((k) => !['linear', 'hold', 'inOutCubic', 'inOutSine', 'outCubic', 'inCubic', 'outBack', 'inBack', 'inOutBack', 'outElastic', 'outBounce'].includes(k))].filter((k) => k === 'hold' || K.easings[k]);
-  m.innerHTML = `<div class="note" style="padding:2px 10px">Плавность к следующему ключу</div>` + names.map((k) => `<button data-ease="${k}">${k}</button>`).join('') + '<hr><button data-del>Удалить ключи</button>';
+  setHTML(m, html`<div class="note" style="padding:2px 10px">Плавность к следующему ключу</div>${names.map((k) => html`<button data-ease="${k}">${k}</button>`)}<hr><button data-del>Удалить ключи</button>`);
   document.body.append(m);
   const r = m.getBoundingClientRect();
   m.style.left = Math.min(x, innerWidth - r.width - 8) + 'px'; m.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';

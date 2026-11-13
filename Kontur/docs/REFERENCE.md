@@ -412,10 +412,10 @@ tint, scale}`, `vignette {strength}`, `fxaa {threshold 0.125, subpix 0.75}` (с�
 
 <!-- gen:world -->
 - **box** `{x:[a,b]!, y:[a,b]=[0,1], z:[a,b]!, color=stone, mats:{грань:[материал,цвет,опции]}, top, sides, spec, emissive, occ}` — коробка (дно видно снизу)
-- **house** `{x:[a,b]!, z:[a,b]!, h=8, y0=0, color=plaster, roof=roof, mat:plaster|stone|brick|none=plaster, ridge:z, roofType:flat|gable|hip|shed=gable, roofH=1.6, facades:[…]=["front","left","right"], doorAt, doorColor, shut, plinth, chimney, pipe, litP=0.25, skip, sides}` — дом: коробка с фасадом, крыша черепицей, окна и двери
+- **house** `{x:[a,b]!, z:[a,b]!, h=8, y0=0, color=plaster, roof=roof, mat:plaster|stone|brick|none=plaster, ridge:z, roofType:flat|gable|hip|shed=gable, roofH=1.6, facades:[…]=["front","left","right"], doorAt, doorColor, shut, plinth, chimney, pipe, litP=0.25, skip, sides, tiles:tile|barrel=tile, tileW=0.24, eave, cornice, roofPmat}` — дом: коробка с фасадом, крыша черепицей, окна и двери
 - **cyl** `{X!, Z!, r=0.3, y:[a,b]=[0,1], color=stone, top, bands, n=16, spec, occ}` — цилиндр (гладкая нормаль)
 - **disc** `{X!, Y=0.003, Z!, rx=0.5, rz, color=iron, spec, base, ink, wob, normal:[X,Y,Z], opacity, emissive}` — плоский эллипс: лужи, люки, ковры
-- **stairs** `{x:[a,b]!, z:[a,b]!, h=2, y0=0, steps, color=stoneHi, mat=stone, jitter}` — лестница вдоль Z
+- **stairs** `{x:[a,b]!, z:[a,b]!, h=2, y0=0, steps, color=stoneHi, mat=stone, jitter, top, nosing, joints}` — лестница вдоль Z
 - **ground** `{x:[a,b]!, z:[a,b]!, y=0, color=cobble, mat=cobble, matOpt:{…}, maxZ=26, spec=0.25}` — земля (горизонтальная грань)
 - **wall** `{ps:[[X,Y,Z],…]!, holes:[…], color=plaster, mat, matColor, matOpt:{…}, spec, emissive, ink, clip}` — грань-многоугольник (фронтон, арка; детали обрезаются по ней)
 - **light** `{p:[X,Y,Z]!, color=#ffc070, radius=5, energy=1, group:lamp|window|candle|fairy=lamp, shadows, anim:{…}}` — точечный источник света
@@ -433,7 +433,7 @@ tint, scale}`, `vignette {strength}`, `fxaa {threshold 0.125, subpix 0.75}` (с�
 - **slab** `{x:[a,b]!, z:[a,b]!, y=0, t=0.2, color=stone, mats:{грань:[материал,цвет,опции]}, occ}` — плита толщиной t (балкон, козырёк, ступень): коробка с видимым дном
 - **ramp** `{x:[a,b]!, z:[a,b]!, y:[a,b]!, base=0, color=stone, mat, matColor, sides=true}` — пандус: наклонный верх от высоты y[0] у z[0] до y[1] у z[1], боковины
 - **road** `{x:[a,b]!, z:[a,b]!, y=0, color=#5d5752, lines=true, lineColor=#e8dcc0, curb=0.15, curbW=0.25, curbColor=stoneHi, walk=2, walkColor=stone, walkMat=slabs}` — улица: проезжая часть, разметка, бордюры и тротуары
-- **window** `{on:{on}!, a, b, w=0.84, h=1.2, lit, shut, box}` — окно с наличником, переплётом, ставнями, ящиком цветов
+- **window** `{on:{on}!, a, b, w=0.84, h=1.2, lit, shut, box, ajar=0}` — окно с наличником, переплётом, ставнями, ящиком цветов
 - **door** `{on:{on}!, a, b, w=1.1, h=2.1, color=wood}` — арочная дверь
 - **pipe** `{on:{on}!, a, b, h}` — водосточная труба
 - **ivy** `{on:{on}!, a, b, w=1.5, h=3, density=80}` — плющ
@@ -513,7 +513,7 @@ params, build})`, `registerMaterial(name, fn, doc)`, `registerProfile(name, fn)`
 | `expr` | Выражение | `prop` — свойство, `props` — несколько свойств, `code` — тело функции (t, v, n, i, ctx) |
 <!-- /gen:modifiers -->
 
-Таблицы выше собираются из реестров движка (`NODE_DEFS` в engine/core/types.js, `MODIFIERS` в engine/core/modifiers.js); JSON Schema сцены — [scene.schema.json](scene.schema.json). Модификатор `expr` исполняет безопасное подмножество JS (`const`/`let`, `if`/`else`, `return`, арифметика, тернарный оператор, `Math.*`); полный JavaScript — только в браузере или при `KONTUR_TRUST_EXPR=1` на сервере.
+Таблицы выше собираются из реестров движка (`NODE_DEFS` в engine/core/types.js, `MODIFIERS` в engine/core/modifiers.js); JSON Schema сцены — [scene.schema.json](scene.schema.json). Модификатор `expr` исполняет безопасное подмножество JS (`const`/`let`, `if`/`else`, `return`, арифметика, тернарный оператор, `Math.*`); полный JavaScript — только при `KONTUR_TRUST_EXPR=1` на сервере или после согласия в студии (кнопка «Доверять» разрешает ровно тот код, что был в сцене; изменённый код снова выключен). Без разрешения такой модификатор не действует.
 
 ## Пресеты
 `popIn`, `fadeOut`, `drawOn`, `morphSequence`, `float`, `pulse`, `stagger`, `typewriter`, `orbitRing` — макросы,

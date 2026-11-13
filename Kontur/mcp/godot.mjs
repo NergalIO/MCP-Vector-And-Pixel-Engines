@@ -10,6 +10,7 @@ import { parseColor } from '../engine/kontur.js';
 import { bakeLayers, layersManifest, SANE } from './layers.mjs';
 import { posixRel } from './paths.mjs';
 import { ambientRGB } from './scene_util.mjs';
+import { cleanExportDir, writeExportList, legacyNote } from './export_dir.mjs';
 
 /* ============================== совместимость ============================== */
 const hasProp = (n, k) => n.props?.[k] != null && n.props[k] !== false || !!n.keys?.[k]?.length;
@@ -76,9 +77,11 @@ void fragment() {
  */
 export async function exportGodot(scene, dir, opts = {}) {
   const resPath = (opts.resPath || `res://${basename(dir)}`).replace(/\/$/, '');
+  // файлы прошлого экспорта — только свои, по списку; чужие файлы папки не трогаются
+  const prev = cleanExportDir(dir, { markers: ['layers', 'scene.tscn'] });
   const b = await bakeLayers(scene, dir, { ...opts, tag: 'godot', layersDir: 'layers' });
-  const { W, px, scale, clips, fpsOf, nodes, lights, frameCount, t0 } = b;
-  const Hh = b.H, normalsOpt = b.normals;
+  const { px, scale, clips, fpsOf, nodes, lights, frameCount, t0 } = b;
+  const normalsOpt = b.normals;
   const resOf = (f) => `${resPath}/${posixRel(dir, f)}`;
   // 4. .tscn
   const ext = [], sub = [];
@@ -165,11 +168,12 @@ func _on_finished(sprite: AnimatedSprite2D) -> void:
   if (shaderId) writeFileSync(join(dir, 'kontur_blend.gdshader'), SHADER);
   const manifest = layersManifest(scene, dir, b, { target: 'godot' });
   writeFileSync(join(dir, 'kontur_manifest.json'), JSON.stringify(manifest, null, 1));
+  writeExportList(dir, [...b.files, ...['scene.tscn', 'kontur_player.gd', 'kontur_blend.gdshader', 'kontur_manifest.json'].map((f) => join(dir, f))]);
   const stat = nodes.filter((n) => n.type === 'static').length, an = nodes.length - stat;
   const summary = `Экспорт для Godot: ${dir}
 Слоёв: ${nodes.length} (статичных ${stat}, анимированных ${an}), PNG-кадров: ${frameCount}, клипы: ${clips.map((c) => `${c.name}@${fpsOf(c)}fps`).join(', ')}${normalsOpt ? ', карты нормалей: да' : ''}${lights.length ? `, свет: ${lights.length} PointLight2D + CanvasModulate` : ''}${px ? `, пиксели ×${px.size} (фильтр «ближайший»)` : ''}${(scene.states || []).length ? `, состояния: ${scene.states.map((g) => g.name).join(', ')} — $Scene.set_state("группа", "вариант")` : ''}, ${((Date.now() - t0) / 1000).toFixed(1)}s.
 Свечение, размытие, тени и дизеринг запечены в PNG; режимы наложения — шейдер kontur_blend.gdshader.
 Скопируйте папку в проект так, чтобы она была по пути ${resPath}/ (или передайте resPath), и откройте scene.tscn.
-Переключение клипа из кода: $Scene.play(&"имя"). Описание слоёв для своего конвертера — kontur_manifest.json.`;
+Переключение клипа из кода: $Scene.play(&"имя"). Описание слоёв для своего конвертера — kontur_manifest.json.${prev.legacy ? '\n' + legacyNote(dir) : ''}`;
   return { summary, manifest };
 }

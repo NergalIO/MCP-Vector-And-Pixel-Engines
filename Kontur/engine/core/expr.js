@@ -8,11 +8,17 @@
  * Number.isFinite, isNaN, isFinite. Циклов нет — выражение всегда завершается.
  * Поля constructor, prototype, __proto__ и т. п. закрыты: выйти к Function нельзя.
  *
- * Код, который не укладывается в подмножество, исполняется как настоящий JS (new Function) только
- * если это разрешено политикой: в браузере — да, в Node — при KONTUR_TRUST_EXPR=1 (или setExprPolicy).
+ * Строки не растут больше MAX_EXPR_STRING (иначе a = a + a, повторённое в коде, раздувает память).
+ *
+ * Код, который не укладывается в подмножество, исполняется как настоящий JS (new Function) только с разрешения:
+ * весь JS — setExprPolicy({ allowJS: true }) или KONTUR_TRUST_EXPR=1 в Node; либо точный текст кода, которому
+ * доверился пользователь (trustExpr — кнопка «Доверять» в студии). В браузере по умолчанию JS тоже выключен:
+ * файл сцены — данные, а не программа, и чужая сцена не должна исполнять код на странице студии.
  */
 import { BoundedCache } from './cache.js';
 
+/** Предел длины строки внутри безопасного выражения. */
+export const MAX_EXPR_STRING = 100000;
 const KEYWORDS = new Set(['const', 'let', 'var', 'if', 'else', 'return', 'true', 'false', 'null', 'undefined', 'typeof', 'NaN', 'Infinity']);
 const BLOCKED = new Set(['constructor', 'prototype', '__proto__', '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__', 'caller', 'callee', 'arguments', 'call', 'apply', 'bind', 'valueOf', 'toString', 'toLocaleString', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable']);
 const PUNCT = ['===', '!==', '**=', '...', '==', '!=', '<=', '>=', '&&', '||', '??', '**', '+=', '-=', '*=', '/=', '%=', '=>', '?.', '(', ')', '[', ']', '{', '}', ',', ';', '?', ':', '.', '+', '-', '*', '/', '%', '<', '>', '!', '='];
@@ -218,7 +224,11 @@ function compileNode(n, scope) {
     case 'bin': {
       const a = compileNode(n.a, scope), b = compileNode(n.b, scope);
       switch (n.op) {
-        case '+': return (f) => a(f) + b(f);
+        case '+': return (f) => {
+          const r = a(f) + b(f);
+          if (typeof r === 'string' && r.length > MAX_EXPR_STRING) throw new Error(`выражение: строка длиннее ${MAX_EXPR_STRING} символов`);
+          return r;
+        };
         case '-': return (f) => a(f) - b(f);
         case '*': return (f) => a(f) * b(f);
         case '/': return (f) => a(f) / b(f);
@@ -245,7 +255,8 @@ function compileNode(n, scope) {
     case 'assign': {
       const name = n.name, val = compileNode(n.value, scope);
       if (!scope.has(name)) throw new ExprSyntaxError(`присваивание необъявленной переменной «${name}»`);
-      const ops = { '=': (x, y) => y, '+=': (x, y) => x + y, '-=': (x, y) => x - y, '*=': (x, y) => x * y, '/=': (x, y) => x / y, '%=': (x, y) => x % y, '**=': (x, y) => x ** y };
+      const add = (x, y) => { const r = x + y; if (typeof r === 'string' && r.length > MAX_EXPR_STRING) throw new Error(`выражение: строка длиннее ${MAX_EXPR_STRING} символов`); return r; };
+      const ops = { '=': (x, y) => y, '+=': add, '-=': (x, y) => x - y, '*=': (x, y) => x * y, '/=': (x, y) => x / y, '%=': (x, y) => x % y, '**=': (x, y) => x ** y };
       const op = ops[n.op];
       return (f) => (f.L[name] = op(f.L[name], val(f)));
     }
@@ -296,16 +307,49 @@ export const isExprSyntaxError = (e) => e instanceof ExprSyntaxError;
 const envTrust = () => {
   try { return globalThis.process?.env?.KONTUR_TRUST_EXPR === '1'; } catch { return false; }
 };
-const policy = { allowJS: typeof window !== 'undefined' || envTrust() };
-/** allowJS: исполнять ли код вне безопасного подмножества как JS. По умолчанию: браузер — да, Node — KONTUR_TRUST_EXPR=1. */
+const policy = { allowJS: envTrust() };
+/** Точные тексты кода, которым доверился пользователь (trustExpr): только они исполняются как JS при allowJS = false. */
+const trustedCode = new Set();
+/** allowJS: исполнять ли любой код вне безопасного подмножества как JS. По умолчанию — нет (в Node — KONTUR_TRUST_EXPR=1). */
 export function setExprPolicy(p = {}) { if ('allowJS' in p) policy.allowJS = !!p.allowJS; exprCache.clear(); return { ...policy }; }
-export const exprPolicy = () => ({ ...policy });
+export const exprPolicy = () => ({ ...policy, trusted: trustedCode.size });
+/** Доверить исполнение именно этих текстов кода (например, всех JS-выражений сцены после согласия пользователя). */
+export function trustExpr(...codes) {
+  for (const c of codes.flat()) if (typeof c === 'string') trustedCode.add(c);
+  exprCache.clear();
+}
+/** Забыть все доверенные тексты кода. */
+export function untrustAllExpr() { trustedCode.clear(); exprCache.clear(); }
+/** Можно ли исполнить код как JS: включён весь JS или этот текст доверен. */
+export const exprAllowed = (code) => policy.allowJS || trustedCode.has(code);
+
+const needsJSMemo = new BoundedCache(2000);
+/** Код выходит за безопасное подмножество (для исполнения нужен настоящий JS). */
+export function exprNeedsJS(code) {
+  code = String(code);
+  let v = needsJSMemo.get(code);
+  if (v === undefined) {
+    try { compileSafeExpr(code); v = false; } catch (e) { if (!isExprSyntaxError(e)) throw e; v = true; }
+    needsJSMemo.set(code, v);
+  }
+  return v;
+}
+/** Тексты JS-выражений сцены (модификаторы expr узлов и символов, выходящие за безопасное подмножество), без повторов. */
+export function sceneJSExprs(scene) {
+  const out = new Set();
+  const nodes = [...(scene?.nodes || []), ...Object.values(scene?.symbols || {}).flatMap((s) => s?.nodes || [])];
+  for (const n of nodes) for (const m of n?.mods || []) if (m?.type === 'expr' && typeof m.code === 'string' && exprNeedsJS(m.code)) out.add(m.code);
+  return [...out];
+}
+/** JS-выражения сцены, которые сейчас не исполняются (нет доверия): для предупреждения «доверять этой сцене?». */
+export const untrustedExprs = (scene) => sceneJSExprs(scene).filter((c) => !exprAllowed(c));
 
 export const exprCache = new BoundedCache(2000);
-const JS_OFF = 'JS-выражения выключены (безопасный режим): код выходит за подмножество выражений. Разрешить: KONTUR_TRUST_EXPR=1 или setExprPolicy({ allowJS: true })';
+const JS_OFF = 'JS-выражения выключены (безопасный режим): код выходит за подмножество выражений. Разрешить: KONTUR_TRUST_EXPR=1, setExprPolicy({ allowJS: true }) или trustExpr(код) (в студии — кнопка «Доверять»)';
 /**
  * Функция выражения expr. strict — для добавления модификатора: код, требующий JS при выключенном JS,
- * — ошибка. Без strict (вычисление загруженной сцены) такой модификатор просто не действует (fn.disabled).
+ * — ошибка. Без strict (вычисление загруженной сцены) такой модификатор просто не действует (fn.disabled):
+ * недоверенный код даже не разбирается как JS.
  */
 export function compileExpr(code, { strict = false } = {}) {
   const key = (strict ? 's|' : 'l|') + code;
@@ -314,12 +358,16 @@ export function compileExpr(code, { strict = false } = {}) {
   try { fn = compileSafeExpr(code); }
   catch (safeErr) {
     if (!isExprSyntaxError(safeErr)) throw safeErr;
-    let js;
-    try { js = new Function('t', 'v', 'n', 'i', 'ctx', code); } // только разбор: тело не исполняется
-    catch (e) { throw new Error(`Ошибка в выражении: ${e.message}`); }
-    if (policy.allowJS) fn = js;
-    else if (strict) throw new Error(`${JS_OFF}. Не поддержано: ${safeErr.message}`);
-    else { fn = () => undefined; fn.disabled = `${JS_OFF}. ${safeErr.message}`; }
+    const allowed = exprAllowed(code);
+    if (allowed || strict) {
+      let js = null;
+      // только разбор (тело не исполняется): синтаксическая ошибка JS — понятное сообщение агенту.
+      // Под CSP без 'unsafe-eval' конструктор бросает EvalError — тогда разбора просто нет.
+      try { js = new Function('t', 'v', 'n', 'i', 'ctx', code); }
+      catch (e) { if (e instanceof SyntaxError) throw new Error(`Ошибка в выражении: ${e.message}`, { cause: e }); if (allowed) throw e; }
+      if (!allowed) throw new Error(`${JS_OFF}. Не поддержано: ${safeErr.message}`, { cause: safeErr });
+      fn = js;
+    } else { fn = () => undefined; fn.disabled = `${JS_OFF}. ${safeErr.message}`; }
   }
   exprCache.set(key, fn);
   return fn;

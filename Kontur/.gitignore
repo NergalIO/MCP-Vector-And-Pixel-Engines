@@ -1,0 +1,16 @@
+# зависимости — ставятся npm ci / npm i
+node_modules/
+
+# сборка: npm run build:engine, npm run build:page
+dist/
+
+# вывод рендеров и проверок
+lit-out/
+lit-base/
+out/
+*.mp4
+*.webm
+
+# служебные файлы сервера: резервная копия и временный файл атомарной записи
+*.bak
+*.tmp

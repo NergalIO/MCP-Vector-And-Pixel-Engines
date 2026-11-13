@@ -1,5 +1,6 @@
 // Инспектор: свойства выбранных объектов, ромбики ключей, IK, кости, модификаторы.
-import { K, E, on, emit, node, kidsOf, ancestors, getVal, setVal, keyState, toggleKey, stateOverride, begin, preview, commit, edit, select, toast, esc, fmtN, uid, worldM, applyPt } from './core.js';
+import { K, E, on, emit, node, getVal, setVal, keyState, toggleKey, stateOverride, begin, preview, commit, edit, select, toast, fmtN, uid, worldM, applyPt } from './core.js';
+import { html, joinHTML, setHTML } from './html.js';
 import { isPathLike, geomOf, pathKey } from './geom.js';
 import { toPathNode, centerPivot } from './actions.js';
 import { setTool } from './tools.js';
@@ -31,7 +32,7 @@ const sel = () => E.sel.map(node).filter(Boolean);
 let raf = 0;
 on('sel scene', () => render());
 on('frame preview', () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; refresh(); }); });
-on('focusProp', (p) => { const el = root.querySelector(`[data-prop="${p}"]`); if (el) { el.focus(); el.select?.(); } });
+on('focusProp', (p) => { const el = root.querySelector(`[data-prop="${CSS.escape(p)}"]`); if (el) { el.focus(); el.select?.(); } });
 
 /* ---------- поля ---------- */
 const kindOf = (f) => f[2] || 'num';
@@ -43,84 +44,92 @@ function parse(kind, s, prop) {
   if (kind === 'paint' || kind === 'any') { const t = String(s).trim(); if (/^[[{]/.test(t)) return JSON.parse(t); return t || 'none'; }
   return s;
 }
+// Разметка — шаблоны html``: подстановки экранируются (имя свойства бывает любым ключом props из файла сцены).
 function field(f, n) {
   const [prop, label] = f, kind = kindOf(f);
   const v = getVal(n, prop), so = stateOverride(n, prop);
-  const ks = keyState(n, prop);
-  const kd = ['num', 'color', 'paint'].includes(kind) || Array.isArray(kind) ? `<button class="kd ${ks || ''}" data-key="${prop}" title="${ks === 'on' ? 'Снять ключ' : 'Поставить ключ'} в момент плейхеда"></button>` : '<span></span>';
+  const ks = keyState(n, prop), num = isNumKind(kind);
+  const kd = ['num', 'color', 'paint'].includes(kind) || Array.isArray(kind) ? html`<button class="kd ${ks || ''}" data-key="${prop}" title="${ks === 'on' ? 'Снять ключ' : 'Поставить ключ'} в момент плейхеда"></button>` : html`<span></span>`;
   let ctl;
-  if (kind === 'bool') ctl = `<input type="checkbox" data-prop="${prop}" data-kind="bool" ${v ? 'checked' : ''}>`;
-  else if (Array.isArray(kind)) ctl = `<select data-prop="${prop}" data-kind="sel">${kind.map((o) => `<option ${o === (v ?? kind[0]) ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
-  else if (kind === 'area') ctl = `<textarea data-prop="${prop}" data-kind="text" rows="2">${esc(v ?? '')}</textarea>`;
+  if (kind === 'bool') ctl = html`<input type="checkbox" data-prop="${prop}" data-kind="bool" ${v ? 'checked' : ''}>`;
+  else if (Array.isArray(kind)) ctl = html`<select data-prop="${prop}" data-kind="sel">${kind.map((o) => html`<option ${o === (v ?? kind[0]) ? 'selected' : ''}>${o}</option>`)}</select>`;
+  else if (kind === 'area') ctl = html`<textarea data-prop="${prop}" data-kind="text" rows="2">${v ?? ''}</textarea>`;
   else if (kind === 'color' || kind === 'paint') {
     const hex = typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v : typeof v === 'string' && /^#[0-9a-f]{3}$/i.test(v) ? '#' + v.slice(1).replace(/./g, '$&$&') : '#000000';
-    ctl = `<input type="color" data-prop="${prop}" data-kind="pick" value="${hex}" ${typeof v === 'object' && v ? 'disabled title="Градиент — правьте текстом"' : ''}><input data-prop="${prop}" data-kind="${kind === 'paint' ? 'paint' : 'text'}" value="${esc(show(v))}">`;
-  } else ctl = `<input data-prop="${prop}" data-kind="${kind}" value="${esc(show(v))}">`;
-  return `<div class="fld${so ? ' st' : ''}">${kd}<label class="${isNumKind(kind) ? 'scrub' : ''}" data-scrub="${isNumKind(kind) ? prop : ''}" title="${esc(prop)}${so ? ` — из состояния «${esc(so.group)}»` : ''}${isNumKind(kind) ? ' · тяните мышью' : ''}">${esc(label)}</label><div class="ctl">${ctl}</div></div>`;
+    ctl = html`<input type="color" data-prop="${prop}" data-kind="pick" value="${hex}" ${typeof v === 'object' && v ? html`disabled title="Градиент — правьте текстом"` : ''}><input data-prop="${prop}" data-kind="${kind === 'paint' ? 'paint' : 'text'}" value="${show(v)}">`;
+  } else ctl = html`<input data-prop="${prop}" data-kind="${kind}" value="${show(v)}">`;
+  const title = prop + (so ? ` — из состояния «${so.group}»` : '') + (num ? ' · тяните мышью' : '');
+  return html`<div class="fld${so ? ' st' : ''}">${kd}<label class="${num ? 'scrub' : ''}" data-scrub="${num ? prop : ''}" title="${title}">${label}</label><div class="ctl">${ctl}</div></div>`;
 }
-const fields = (list, n) => list.map((f) => field(f, n)).join('');
+const fields = (list, n) => list.map((f) => field(f, n));
 
 /* ---------- отрисовка ---------- */
 function render() {
   const ns = sel();
   if (!ns.length) {
-    root.innerHTML = `<div class="empty">Ничего не выбрано.<br><br>Щелчок по объекту на холсте или в списке — выбор, двойной щелчок — внутрь группы или к точкам контура. Shift — добавить к выбору, Ctrl — объект внутри группы, рамка — выбор областью.<br><br>Настройки сцены, состояния, клипы и пиксельный режим — во вкладке «Сцена».</div>`;
+    setHTML(root, html`<div class="empty">Ничего не выбрано.<br><br>Щелчок по объекту на холсте или в списке — выбор, двойной щелчок — внутрь группы или к точкам контура. Shift — добавить к выбору, Ctrl — объект внутри группы, рамка — выбор областью.<br><br>Настройки сцены, состояния, клипы и пиксельный режим — во вкладке «Сцена».</div>`);
     return;
   }
   const n = ns[0], multi = ns.length > 1;
-  let h = multi
-    ? `<h3>Выбрано: ${ns.length}</h3><div class="note">Правка поля меняет его у всех выбранных.</div>`
-    : `<h3><input id="i-name" value="${esc(n.id)}" aria-label="Имя объекта"><span class="note">${esc(n.type)}</span></h3>` + (n.parent ? `<div class="note">в группе <a href="#" data-goto="${esc(n.parent)}">${esc(n.parent)}</a></div>` : '');
-  h += `<h4>Положение</h4><div class="pair">${field(['x', 'X'], n)}${field(['y', 'Y'], n)}</div>${field(['rotation', 'Поворот'], n)}`;
-  h += `<div class="pair">${field(['scaleX', 'Масштаб X'], n)}${field(['scaleY', 'Масштаб Y'], n)}</div>`;
-  h += `<details${n.props?.anchorX || n.props?.anchorY || n.props?.skewX || n.props?.scale != null ? ' open' : ''}><summary class="note">Опора, скос, общий масштаб</summary><div class="pair">${field(['anchorX', 'Опора X'], n)}${field(['anchorY', 'Опора Y'], n)}</div>${field(['skewX', 'Скос'], n)}${field(['scale', 'Масштаб'], n)}</details>`;
-  if (!ns.every((x) => x.type === 'light')) h += `<div class="btns"><button id="i-pivc" title="Перенести опорную точку (центр поворота и масштаба) в центр рамки — картинка не сдвинется">⊕ Опора в центр</button></div>`;
-  h += field(['opacity', 'Непрозрачность'], n) + field(['visible', 'Видимость', 'bool'], n);
+  const h = [multi
+    ? html`<h3>Выбрано: ${ns.length}</h3><div class="note">Правка поля меняет его у всех выбранных.</div>`
+    : html`<h3><input id="i-name" value="${n.id}" aria-label="Имя объекта"><span class="note">${n.type}</span></h3>${n.parent ? html`<div class="note">в группе <a href="#" data-goto="${n.parent}">${n.parent}</a></div>` : ''}`];
+  h.push(html`<h4>Положение</h4><div class="pair">${field(['x', 'X'], n)}${field(['y', 'Y'], n)}</div>${field(['rotation', 'Поворот'], n)}`);
+  h.push(html`<div class="pair">${field(['scaleX', 'Масштаб X'], n)}${field(['scaleY', 'Масштаб Y'], n)}</div>`);
+  h.push(html`<details${n.props?.anchorX || n.props?.anchorY || n.props?.skewX || n.props?.scale != null ? ' open' : ''}><summary class="note">Опора, скос, общий масштаб</summary><div class="pair">${field(['anchorX', 'Опора X'], n)}${field(['anchorY', 'Опора Y'], n)}</div>${field(['skewX', 'Скос'], n)}${field(['scale', 'Масштаб'], n)}</details>`);
+  if (!ns.every((x) => x.type === 'light')) h.push(html`<div class="btns"><button id="i-pivc" title="Перенести опорную точку (центр поворота и масштаба) в центр рамки — картинка не сдвинется">⊕ Опора в центр</button></div>`);
+  h.push(field(['opacity', 'Непрозрачность'], n), field(['visible', 'Видимость', 'bool'], n));
   const types = new Set(ns.map((x) => x.type));
-  if (types.size === 1 && SHAPE[n.type]?.length) h += `<h4>${{ text: 'Текст', image: 'Картинка', light: 'Свет', blob: 'Клякса' }[n.type] || 'Фигура'}</h4>` + fields(SHAPE[n.type], n);
-  if (!multi && n.type === 'image') h += `<div class="fld"><span></span><label>Файл</label><div class="ctl"><span class="note" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(String(n.props?.src || ''))}">${esc(String(n.props?.src || '').replace(/^\/asset\?p=/, '').split(/[\\/]|%5C|%2F/i).pop().slice(0, 40))}</span><button id="i-src">Заменить…</button></div></div>`;
-  if (!types.has('light') && !types.has('group')) h += `<h4>Вид</h4>` + fields(LOOK, n);
-  if (!multi && (n.type === 'path' || pathKey(n))) h += fields(TRIM, n);
-  if (types.has('group')) h += `<h4>Вид</h4>` + fields([['blend', 'Наложение', BLENDS], ['blur', 'Размытие']], n);
-  if (!multi) h += extra(n);
-  root.innerHTML = h;
+  if (types.size === 1 && SHAPE[n.type]?.length) h.push(html`<h4>${{ text: 'Текст', image: 'Картинка', light: 'Свет', blob: 'Клякса' }[n.type] || 'Фигура'}</h4>`, fields(SHAPE[n.type], n));
+  if (!multi && n.type === 'image') {
+    const src = String(n.props?.src || '');
+    h.push(html`<div class="fld"><span></span><label>Файл</label><div class="ctl"><span class="note" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${src}">${src.replace(/^\/asset\?p=/, '').split(/[\\/]|%5C|%2F/i).pop().slice(0, 40)}</span><button id="i-src">Заменить…</button></div></div>`);
+  }
+  if (!types.has('light') && !types.has('group')) h.push(html`<h4>Вид</h4>`, fields(LOOK, n));
+  if (!multi && (n.type === 'path' || pathKey(n))) h.push(fields(TRIM, n));
+  if (types.has('group')) h.push(html`<h4>Вид</h4>`, fields([['blend', 'Наложение', BLENDS], ['blur', 'Размытие']], n));
+  if (!multi) h.push(extra(n));
+  setHTML(root, h);
   wire(ns);
 }
 
 function extra(n) {
-  let h = '';
-  const opts = (cur, filter) => `<option value="">—</option>` + E.scene.nodes.filter(filter).map((x) => `<option ${x.id === cur ? 'selected' : ''}>${esc(x.id)}</option>`).join('');
+  const h = [];
+  const opts = (cur, filter) => html`<option value="">—</option>${E.scene.nodes.filter(filter).map((x) => html`<option ${x.id === cur ? 'selected' : ''}>${x.id}</option>`)}`;
   // контур
-  if (isPathLike(n) && n.type !== 'image') h += `<div class="btns"><button id="i-points" title="Инструмент «Точки» (A)">Править точки</button>${!pathKey(n) && n.type !== 'path' ? '<button id="i-topath">Превратить в контур</button>' : ''}</div>`;
+  if (isPathLike(n) && n.type !== 'image') h.push(html`<div class="btns"><button id="i-points" title="Инструмент «Точки» (A)">Править точки</button>${!pathKey(n) && n.type !== 'path' ? html`<button id="i-topath">Превратить в контур</button>` : ''}</div>`);
   // кость и IK
   const B = node(n.parent), canIK = !!(B && B.parent);
   if (n.type === 'group' || n.props?.bone) {
-    h += `<h4>Кость</h4>${field(['bone', 'Кость', 'bool'], n)}${n.props?.bone ? field(['boneLength', 'Длина'], n) : ''}<div class="note">Тяните кость на холсте — она повернётся вокруг сустава; Ctrl — сдвинуть.</div>`;
+    h.push(html`<h4>Кость</h4>${field(['bone', 'Кость', 'bool'], n)}${n.props?.bone ? field(['boneLength', 'Длина'], n) : ''}<div class="note">Тяните кость на холсте — она повернётся вокруг сустава; Ctrl — сдвинуть.</div>`);
   }
   if (canIK || n.props?.ik) {
     const ik = n.props?.ik;
-    h += `<h4>IK — конец цепочки</h4>`;
+    h.push(html`<h4>IK — конец цепочки</h4>`);
     if (ik) {
-      h += `<div class="note">${esc(B?.parent || '?')} → ${esc(n.parent)} → ${esc(n.id)} тянется к цели</div>`;
-      h += `<div class="fld"><span></span><label>Цель</label><div class="ctl"><select id="ik-target">${opts(ik.target, (x) => x.id !== n.id && ![n.parent, B?.parent].includes(x.id))}</select></div></div>`;
-      h += `<div class="fld"><span></span><label>Сгиб наоборот</label><div class="ctl"><input type="checkbox" id="ik-flip" ${ik.flip ? 'checked' : ''}></div></div>`;
-      h += `<div class="fld"><span></span><label title="Конец повторяет поворот цели">Как цель</label><div class="ctl"><input type="checkbox" id="ik-orient" ${ik.orient ? 'checked' : ''}></div></div>`;
-      h += field(['ikWeight', 'Вес IK'], n) + `<div class="btns"><button id="ik-off">Снять IK</button></div>`;
-    } else h += `<div class="btns"><button id="ik-on" title="Создать цель в точке объекта: двигайте цель — ${esc(n.parent)} и ${esc(B.parent)} повернутся">Добавить IK</button></div>`;
+      h.push(html`<div class="note">${B?.parent || '?'} → ${n.parent} → ${n.id} тянется к цели</div>`);
+      h.push(html`<div class="fld"><span></span><label>Цель</label><div class="ctl"><select id="ik-target">${opts(ik.target, (x) => x.id !== n.id && ![n.parent, B?.parent].includes(x.id))}</select></div></div>`);
+      h.push(html`<div class="fld"><span></span><label>Сгиб наоборот</label><div class="ctl"><input type="checkbox" id="ik-flip" ${ik.flip ? 'checked' : ''}></div></div>`);
+      h.push(html`<div class="fld"><span></span><label title="Конец повторяет поворот цели">Как цель</label><div class="ctl"><input type="checkbox" id="ik-orient" ${ik.orient ? 'checked' : ''}></div></div>`);
+      h.push(field(['ikWeight', 'Вес IK'], n), html`<div class="btns"><button id="ik-off">Снять IK</button></div>`);
+    } else h.push(html`<div class="btns"><button id="ik-on" title="Создать цель в точке объекта: двигайте цель — ${n.parent} и ${B.parent} повернутся">Добавить IK</button></div>`);
   }
   // обрезка и маска
-  h += `<h4>Обрезка и маска</h4><div class="fld"><span></span><label title="Объект виден только внутри формы">Обрезать по</label><div class="ctl"><select id="i-clip">${opts(n.props?.clip, (x) => x.id !== n.id && x.type !== 'light')}</select></div></div>`;
-  h += `<div class="fld"><span></span><label title="Яркость маски = непрозрачность">Маска</label><div class="ctl"><select id="i-mask">${opts(n.props?.mask, (x) => x.id !== n.id && x.type !== 'light')}</select></div></div>`;
+  h.push(html`<h4>Обрезка и маска</h4><div class="fld"><span></span><label title="Объект виден только внутри формы">Обрезать по</label><div class="ctl"><select id="i-clip">${opts(n.props?.clip, (x) => x.id !== n.id && x.type !== 'light')}</select></div></div>`);
+  h.push(html`<div class="fld"><span></span><label title="Яркость маски = непрозрачность">Маска</label><div class="ctl"><select id="i-mask">${opts(n.props?.mask, (x) => x.id !== n.id && x.type !== 'light')}</select></div></div>`);
   // модификаторы
-  if (n.mods?.length) h += `<h4>Модификаторы</h4>` + n.mods.map((m, i) => `<div class="fld"><span></span><label style="color:var(--mod)">${esc(m.type)}</label><div class="ctl"><span class="note" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(JSON.stringify(m))}">${esc(Object.entries(m).filter(([k]) => k !== 'type').map(([k, v]) => `${k} ${typeof v === 'object' ? '…' : v}`).join(', '))}</span><button data-delmod="${i}" title="Удалить модификатор">×</button></div></div>`).join('');
+  if (n.mods?.length) {
+    const brief = (m) => Object.entries(m).filter(([k]) => k !== 'type').map(([k, v]) => `${k} ${typeof v === 'object' ? '…' : v}`).join(', ');
+    h.push(html`<h4>Модификаторы</h4>`, n.mods.map((m, i) => html`<div class="fld"><span></span><label style="color:var(--mod)">${m.type}</label><div class="ctl"><span class="note" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${JSON.stringify(m)}">${brief(m)}</span><button data-delmod="${i}" title="Удалить модификатор">×</button></div></div>`));
+  }
   // состояния
   const st = (E.scene.states || []).map((g) => [g.name, Object.entries(g.values || {}).filter(([, p]) => p[n.id]).map(([v]) => v)]).filter(([, v]) => v.length);
-  if (st.length) h += `<h4>Состояния</h4><div class="note">${st.map(([g, v]) => `${esc(g)}: ${v.map(esc).join(', ')}`).join('<br>')}</div>`;
+  if (st.length) h.push(html`<h4>Состояния</h4><div class="note">${joinHTML(st.map(([g, v]) => `${g}: ${v.join(', ')}`), html`<br>`)}</div>`);
   // прочие свойства
   const other = Object.keys(n.props || {}).filter((k) => !KNOWN.has(k));
-  if (other.length) h += `<h4>Другие свойства</h4>` + other.map((k) => field([k, k, typeof n.props[k] === 'number' ? 'num' : typeof n.props[k] === 'boolean' ? 'bool' : 'any'], n)).join('');
+  if (other.length) h.push(html`<h4>Другие свойства</h4>`, other.map((k) => field([k, k, typeof n.props[k] === 'number' ? 'num' : typeof n.props[k] === 'boolean' ? 'bool' : 'any'], n)));
   // правки поверх скрипта
-  if (E.edits?.mode && (E.edits.nodes || []).includes(n.id)) h += `<h4>Правки поверх скрипта</h4><div class="btns"><button id="i-reset" title="Вернуть объект к сцене из build-скрипта">Сбросить правки объекта</button></div>`;
+  if (E.edits?.mode && (E.edits.nodes || []).includes(n.id)) h.push(html`<h4>Правки поверх скрипта</h4><div class="btns"><button id="i-reset" title="Вернуть объект к сцене из build-скрипта">Сбросить правки объекта</button></div>`);
   return h;
 }
 

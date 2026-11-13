@@ -105,6 +105,32 @@ export const MAT = {
     for (let i = 0; i < Math.round(fr.w / 3); i++) out.push(S.det(fr, blob(fr, rnd() * fr.w, rnd() * fr.h * 0.5, 0.3 + rnd() * 0.3, 8, 0.6), C.mossSh, { op: 0.6, n: fr.tilt(0, 0.5, 0.5) }));
     return out;
   },
+  /** Канальная (полукруглая) черепица: выпуклые ряды-«крышки» вдоль ската, желобки между ними, тени на стыках рядов. */
+  barrel(S, fr, c = C.roof, o = {}) {
+    const out = [S.det(fr, fr.rect(0, 0, fr.w, fr.h), dark(c, 0.42))];
+    const tw = o.tw || 0.24, rh = o.rh || 0.42, cw = tw * 0.64, sw = cw * 0.24, pan = dark(c, 0.2);
+    for (let a = (fr.w % tw) / 2 - tw; a < fr.w; a += tw) {
+      // желобок (вогнутая черепица) — между крышками, в тени
+      const rp = clipR(fr, a + cw, 0, tw - cw, fr.h);
+      if (rp) out.push(S.det(fr, fr.rect(...rp), pan, { n: fr.tilt(0, 0.3, 1), spec: 0.15 }));
+      // крышка: свет слева, середина, тень справа — полукруглое сечение по нормалям
+      const rl = clipR(fr, a, 0, sw, fr.h), rr = clipR(fr, a + cw - sw, 0, sw, fr.h);
+      if (rl) out.push(S.det(fr, fr.rect(...rl), lite(c, 0.1), { n: fr.tilt(-0.9, 0.3, 1), spec: 0.3 }));
+      if (rr) out.push(S.det(fr, fr.rect(...rr), dark(c, 0.16), { n: fr.tilt(0.9, 0.3, 1), spec: 0.2 }));
+      for (let b = 0, row = 0; b < fr.h; b += rh, row++) {
+        const cc = rnd() < 0.05 ? mix(c, C.mossSh, 0.45) : jit(c, 0.1), rm = clipR(fr, a + sw, b, cw - 2 * sw, rh - 0.02);
+        if (rm) out.push(S.det(fr, fr.rect(...rm), cc, { n: fr.tilt(0, 0.3, 1), spec: 0.3 }));
+      }
+    }
+    // стыки рядов: нижний край каждой черепицы отбрасывает тень на ряд ниже
+    for (let b = rh; b < fr.h; b += rh) {
+      if (S.lod && rh * 0.12 * S.lodPx(fr, fr.w / 2, b) < S.lodMin()) break;
+      const r = clipR(fr, 0, b - rh * 0.1, fr.w, rh * 0.1);
+      if (r) out.push(S.det(fr, fr.rect(...r), dark(c, 0.3), { n: fr.tilt(0, -1, 0.8), op: 0.75 }));
+    }
+    for (let i = 0; i < Math.round(fr.w / 4); i++) out.push(S.det(fr, blob(fr, rnd() * fr.w, rnd() * fr.h * 0.4, 0.25 + rnd() * 0.25, 8, 0.6), C.mossSh, { op: 0.4, n: fr.tilt(0, 0.5, 0.5) }));
+    return out;
+  },
   cobble(S, fr, c = C.cobble, o = {}) {
     const out = [S.det(fr, fr.rect(0, 0, fr.w, fr.h), dark(c, 0.42))];
     const maxZ = o.maxZ ?? 30;
@@ -176,6 +202,7 @@ export const MATERIAL_DOCS = {
   plaster: 'patches (пятна штукатурки, true)',
   wood: 'pw (ширина доски), vert (вертикальные доски)',
   tile: 'rh (высота ряда черепицы), tw (ширина)',
+  barrel: 'tw (шаг рядов-крышек, 0.24), rh (длина черепицы вдоль ската, 0.42)',
   cobble: 'maxZ (дальше — без камней, 26)',
   stripes: 'w (ширина полосы, 0.18), c2 (второй цвет), op, thin (false — без тонких линий)',
   panels: 'pw (ширина панели), rows (рядов), rail (поперечины), s',

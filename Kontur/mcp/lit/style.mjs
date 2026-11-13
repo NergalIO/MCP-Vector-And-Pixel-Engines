@@ -201,7 +201,7 @@ const STYLES = {
       const l1 = horz ? lN : lW, l2 = horz ? lS : lE, g1 = Math.abs(l1 - lC), g2 = Math.abs(l2 - lC);
       const neg = g1 >= g2, grad = Math.max(g1, g2) * 0.25, lEdge = ((neg ? l1 : l2) + lC) * 0.5, stepLen = neg ? -1 : 1;
       // вдоль края до концов
-      let ux = x + 0.5 + (horz ? 0 : stepLen * 0.5), uy = y + 0.5 + (horz ? stepLen * 0.5 : 0);
+      const ux = x + 0.5 + (horz ? 0 : stepLen * 0.5), uy = y + 0.5 + (horz ? stepLen * 0.5 : 0);
       const dx = horz ? 1 : 0, dy = horz ? 0 : 1;
       const lumAt = (fx, fy) => { const xi = Math.floor(fx - 0.5), yi = Math.floor(fy - 0.5), tx = fx - 0.5 - xi, ty = fy - 0.5 - yi; return bilin(at(xi, yi), at(xi + 1, yi), at(xi, yi + 1), at(xi + 1, yi + 1), tx, ty); };
       let p1x = ux - dx, p1y = uy - dy, p2x = ux + dx, p2y = uy + dy;

@@ -38,8 +38,5 @@ export function startServer({ env = {}, failOnExit = true } = {}) {
 /** Первый текстовый блок ответа инструмента. */
 export const txt = (r) => r.content.find((c) => c.type === 'text')?.text || '';
 
-let passed = 0;
-/** Проверка сквозного теста: провал — исключение, успех — строка «✓ msg» и счёт. */
-export const check = (cond, msg) => { if (!cond) throw new Error('ПРОВАЛ: ' + msg); passed++; console.log('✓', msg); };
-/** Сколько проверок пройдено. */
-export const checks = () => passed;
+/** Проверка внутри шага сквозного теста: провал — исключение (шаг node:test падает), успех — строка «✓ msg». */
+export const check = (cond, msg) => { if (!cond) throw new Error('ПРОВАЛ: ' + msg); console.log('✓', msg); };

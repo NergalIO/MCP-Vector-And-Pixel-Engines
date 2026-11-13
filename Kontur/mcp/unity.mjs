@@ -10,13 +10,14 @@
 //                              свет — Light2D (точечные + общий «Ambient»), режимы наложения — материал Kontur/Sprite Blend
 //   Kontur/Runtime/KonturPlayer.cs, KonturBlend.shader — один раз на проект (GUID постоянные)
 // Формат файлов снят с Unity 6000.6 (эталон, который Unity пишет сам) и проверяется импортом в Unity.
-import { readFileSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseColor } from '../engine/kontur.js';
 import { bakeLayers, layersManifest, SANE } from './layers.mjs';
 import { posixRel, writeFileEnsured } from './paths.mjs';
 import { ambientRGB } from './scene_util.mjs';
+import { cleanExportDir, writeExportList, legacyNote } from './export_dir.mjs';
 import { crc32, guidOf, fileIdOf, unityAssetsRoot, unityColorSpace, assetKey, fitUrpLight, urpAmbient, UNITY_BLEND, num, ystr } from './unity_common.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -558,20 +559,22 @@ export async function exportUnity(scene, dir, opts = {}) {
   const pipeline = opts.pipeline === 'builtin' ? 'builtin' : 'urp';
   const ppu = opts.ppu > 0 ? opts.ppu : 100;
   // имя префаба и контроллера: Unity понимает любые буквы, убираем только запрещённые в именах файлов знаки
+  // eslint-disable-next-line no-control-regex -- управляющие символы в имени файла запрещены
   const title = String(opts.title || 'KonturScene').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim().slice(0, 60) || 'KonturScene';
   const assetsRoot = unityAssetsRoot(dir);
   const colorSpace = opts.colorSpace === 'gamma' || opts.colorSpace === 'linear' ? opts.colorSpace : unityColorSpace(assetsRoot);
   const keyOf = (f) => assetKey(f, assetsRoot);
   const guidFor = (f) => guidOf(keyOf(f));
-  for (const d of ['Animations', 'Materials']) if (existsSync(join(dir, d))) rmSync(join(dir, d), { recursive: true, force: true });
+  // файлы прошлого экспорта — только свои, по списку: в Assets/Materials, Assets/Animations проекта лежат чужие ассеты
+  const prev = cleanExportDir(dir, { markers: ['Layers', 'Animations', 'Materials'] });
   const b = await bakeLayers(scene, dir, { ...opts, lights: pipeline === 'urp' ? opts.lights : false, tag: 'unity', layersDir: 'Layers' });
   const { W, H, px, scale, clips, fpsOf, clipStem, nodes, lights, frameCount, t0 } = b;
   const texPPU = ppu * scale;
   const [ox, oy] = opts.origin === 'top-left' ? [0, 0] : [W / 2, H / 2];
   const toUnity = (x, y) => [(x - ox) / ppu, -(y - oy) / ppu];
   const point = !!px && !px.aa;
-  const written = [];
-  const put = (f, text, meta) => { if (text != null) writeFileEnsured(f, text); if (meta) writeFileEnsured(f + '.meta', meta); written.push(f); };
+  const written = [], metas = [];
+  const put = (f, text, meta) => { if (text != null) writeFileEnsured(f, text); if (meta) { writeFileEnsured(f + '.meta', meta); metas.push(f + '.meta'); } written.push(f); };
 
   // 1. текстуры: .meta с постоянными GUID
   const spriteGuid = new Map();
@@ -740,8 +743,12 @@ MonoBehaviour:
   const mf = join(dir, 'kontur_manifest.json');
   put(mf, JSON.stringify(manifest, null, 1), jsonMeta(guidFor(mf)));
 
+  // список своих файлов (общий скрипт и шейдер вне папки экспорта в него не попадают и не удаляются)
+  writeExportList(dir, [...b.files, ...b.files.map((f) => f + '.meta'), ...written, ...metas]);
+
   const stat = nodes.filter((n) => n.type === 'static').length;
   const notes = [];
+  if (prev.legacy) notes.push(legacyNote(dir));
   if (!assetsRoot) notes.push(`Папка не внутри проекта Unity: скопируйте её в Assets целиком. ${posixRel(dir, runtimeDir) || runtimeDir} (скрипт и шейдер) нужна в проекте один раз — если она там уже есть, эту копию удалите, иначе будет два класса KonturPlayer.`);
   if (pipeline === 'builtin' && b.lights?.length === 0 && scene.nodes.some((n) => n.type === 'light')) notes.push('Свет не перенесён: во встроенном конвейере нет 2D-света (нужен URP).');
   if (blendModes.some((m) => !UNITY_BLEND[m].exact)) notes.push(`Режимы ${blendModes.filter((m) => !UNITY_BLEND[m].exact).join(', ')} переданы приблизительно (точно — multiply, screen).`);

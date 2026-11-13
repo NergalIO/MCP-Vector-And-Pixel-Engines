@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { makeScene } from '../examples/ref/common.mjs';
 import { renderLit, renderPasses } from '../mcp/lighting.mjs';
 import { probeRaster } from '../mcp/render.mjs';
-import { encodePNG, decodePNG } from '../mcp/normals.mjs';
+import { decodePNG } from '../mcp/normals.mjs';
 import { imageDiff } from './helpers/image.mjs';
 
 const ref = resolve(dirname(fileURLToPath(import.meta.url)), '../examples/ref');

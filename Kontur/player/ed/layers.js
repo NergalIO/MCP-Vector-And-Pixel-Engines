@@ -1,5 +1,6 @@
 // Список слоёв: дерево, видимость, замок, переименование, перетаскивание (порядок и вложение).
-import { K, E, on, emit, node, kidsOf, ancestors, edit, select, esc, toast } from './core.js';
+import { K, E, on, emit, node, kidsOf, ancestors, edit, select } from './core.js';
+import { html, setHTML } from './html.js';
 import { reparent, groupSel, ungroupSel, duplicateSel, deleteSel, restack } from './actions.js';
 
 const ul = document.getElementById('layers');
@@ -34,16 +35,14 @@ function render() {
       const k = n.keys ? Object.keys(n.keys).length : 0, m = n.mods?.length || 0;
       const vis = n.props?.visible !== false, lock = !!n.props?.locked;
       const cls = [E.sel.includes(n.id) && 'sel', E.scope === n.id && 'scope', !vis && 'dim'].filter(Boolean).join(' ');
-      rows.push(`<li data-id="${esc(n.id)}" class="${cls}" style="padding-left:${4 + depth * 13}px" title="${esc(n.id)}">`
-        + `<span class="car" data-car>${kids ? (open ? '▾' : '▸') : ''}</span><span class="ty">${TY[n.type] || n.type}</span><span class="nm">${esc(n.id)}</span>`
-        + (k ? `<span class="badge k" title="Анимированных свойств: ${k}">${k}</span>` : '') + (m ? `<span class="badge m" title="Модификаторов: ${m}">∿${m}</span>` : '')
-        + (states.has(n.id) ? '<span class="badge s" title="Меняется в состояниях">S</span>' : '') + (n.props?.bone ? '<span class="badge b" title="Кость">B</span>' : '') + (iks.has(n.id) ? '<span class="badge b" title="Конец IK-цепочки">IK</span>' : '')
-        + `<span class="ic${vis ? '' : ' set'}" data-vis title="${vis ? 'Скрыть' : 'Показать'}">${vis ? '👁' : '—'}</span><span class="ic${lock ? ' set' : ''}" data-lock title="${lock ? 'Разблокировать' : 'Заблокировать'}">${lock ? '🔒' : '🔓'}</span></li>`);
+      const badges = html`${k ? html`<span class="badge k" title="Анимированных свойств: ${k}">${k}</span>` : ''}${m ? html`<span class="badge m" title="Модификаторов: ${m}">∿${m}</span>` : ''}${states.has(n.id) ? html`<span class="badge s" title="Меняется в состояниях">S</span>` : ''}${n.props?.bone ? html`<span class="badge b" title="Кость">B</span>` : ''}${iks.has(n.id) ? html`<span class="badge b" title="Конец IK-цепочки">IK</span>` : ''}`;
+      const icons = html`<span class="ic${vis ? '' : ' set'}" data-vis title="${vis ? 'Скрыть' : 'Показать'}">${vis ? '👁' : '—'}</span><span class="ic${lock ? ' set' : ''}" data-lock title="${lock ? 'Разблокировать' : 'Заблокировать'}">${lock ? '🔒' : '🔓'}</span>`;
+      rows.push(html`<li data-id="${n.id}" class="${cls}" style="padding-left:${4 + depth * 13}px" title="${n.id}"><span class="car" data-car>${kids ? (open ? '▾' : '▸') : ''}</span><span class="ty">${TY[n.type] || n.type}</span><span class="nm">${n.id}</span>${badges}${icons}</li>`);
       if (kids && open) walk(n.id, depth + 1);
     }
   };
   walk(null, 0);
-  ul.innerHTML = rows.join('') || '<li class="note">Сцена пуста — рисуйте инструментами слева</li>';
+  setHTML(ul, rows.length ? rows : html`<li class="note">Сцена пуста — рисуйте инструментами слева</li>`);
   const first = ul.querySelector('li.sel');
   if (first && E.focus !== 'layers') first.scrollIntoView({ block: 'nearest' });
 }
@@ -105,7 +104,7 @@ ul.addEventListener('dblclick', (e) => {
   const li = liOf(e.target);
   if (!li || e.target.closest('[data-vis],[data-lock],[data-car]')) return;
   const id = li.dataset.id, nm = li.querySelector('.nm');
-  nm.innerHTML = `<input value="${esc(id)}" aria-label="Новое имя">`;
+  setHTML(nm, html`<input value="${id}" aria-label="Новое имя">`);
   const inp = nm.firstChild;
   inp.focus(); inp.select();
   let done = false;

@@ -1,0 +1,19 @@
+{
+  // Проверка типов по JSDoc (npm run typecheck): только файлы с пометкой // @ts-check в начале,
+  // остальные JS-файлы участвуют лишь как источник типов для импортов. Сборки нет (noEmit).
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["mcp/**/*.mjs", "scripts/**/*.mjs"]
+}

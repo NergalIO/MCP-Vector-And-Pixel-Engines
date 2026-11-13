@@ -132,7 +132,7 @@ export const MODIFIERS = {
   expr: {
     targets: (m) => m.props || [m.prop],
     params: { ...PROP_PARAMS, code: pStr(undefined, 'тело функции (t, v, n, i, ctx)') },
-    doc: 'Выражение: тело функции (t, v, n, i, ctx) → новое значение. i — индекс копии, ctx — {noise1, noise3, fbm, lerp, clamp, ease(name, u), scene, prop}. Безопасное подмножество JS (const/let, if/else, return, арифметика, тернарный, Math.*); код вне подмножества исполняется как JS только при KONTUR_TRUST_EXPR=1 (в браузере — всегда). Пример: "return v + Math.sin(t*3 + i)*20".',
+    doc: 'Выражение: тело функции (t, v, n, i, ctx) → новое значение. i — индекс копии, ctx — {noise1, noise3, fbm, lerp, clamp, ease(name, u), scene, prop}. Безопасное подмножество JS (const/let, if/else, return, арифметика, тернарный, Math.*); код вне подмножества исполняется как JS только с разрешения: KONTUR_TRUST_EXPR=1 на сервере, в студии — кнопка «Доверять» для кода этой сцены. Пример: "return v + Math.sin(t*3 + i)*20".',
     validate: (m) => { if (typeof m.code !== 'string') throw new Error('expr: нужен code — строка'); compileExpr(m.code, { strict: true }); },
     apply: (node, m, mi, name, v, t, ctx, copy, w) => {
       const f = compileExpr(m.code);

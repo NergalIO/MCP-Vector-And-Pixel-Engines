@@ -10,7 +10,7 @@ import { gpuGather } from './gpu-kernels.mjs';
 
 /** Добавить отражённый свет в light (на месте). ambient(i, c) — окружающая часть light (её не отражаем). */
 export function screenGI(G, gi, { light, lampL, lin, ao, ambient }) {
-  const { W, H, n, hw, hh, hn, mask, Px, Py, Pz, Nx, Ny, Nz, Dp } = G;
+  const { W, H, n, hw, hh, hn, mask } = G;
   const rad = gi.radius ?? 2.5;
   const [hm, hx, hy, hz, hnx, hny, hnz, hD] = halves(G, 'mask', 'Px', 'Py', 'Pz', 'Nx', 'Ny', 'Nz', 'Dp');
   const radc = [f32(hn), f32(hn), f32(hn)];

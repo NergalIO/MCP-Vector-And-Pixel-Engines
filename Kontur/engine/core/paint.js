@@ -30,8 +30,9 @@ export function trimDash(s, e, o, L) {
   const span = e - s;
   if (span >= 0.9999) return null;
   if (span <= 1e-5) return { hide: true };
-  let a = s + o, b = e + o;
-  a -= Math.floor(a); b = a + span;
+  let a = s + o;
+  a -= Math.floor(a);
+  const b = a + span;
   if (b <= 1) return { dash: `0 ${fmt(a * L)} ${fmt(span * L)} ${fmt(L * 2)}`, off: 0 };
   return { dash: `${fmt((b - 1) * L)} ${fmt((a - (b - 1)) * L)} ${fmt((1 - a) * L)} ${fmt(L)}`, off: 0 };
 }
@@ -104,7 +105,7 @@ export const solidOf = (fill) => (typeof fill === 'string' ? fill : isGrad(fill)
 export function ditherPattern(ctx, name, hi, color, cell, alpha, lo = 0) {
   const key = `${name}|${lo}|${hi}|${color}|${cell}|${alpha}`;
   if (ctx.patterns.has(key)) return ctx.reuse(key);
-  const M = DITHER_PATTERNS[name], n = M.length, L = n * n;
+  const M = DITHER_PATTERNS[name], n = M.length;
   const id = `${ctx.prefix}-dp${hashStr(key)}`;
   const rects = [];
   for (let y = 0; y < n; y++) {

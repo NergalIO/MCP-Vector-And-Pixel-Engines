@@ -139,15 +139,18 @@ reg('crate', (S, d) => {
   const p = (a, b, y) => [X + u[0] * a + w[0] * b, y, Z + u[2] * a + w[2] * b];
   const zc = Z + (u[2] * L + w[2] * Wd) / 2;
   const sw = pxw(S, 0.02, zc), sl = dark(c, 0.45);
+  // плоскости граней: рейки и щели лежат на них (иначе край толстой рейки освещается как стена за ящиком — «просвечивает»)
+  const plOf = (nv, q) => ({ pl: [nv[0], nv[1], nv[2], nv[0] * q[0] + nv[1] * q[1] + nv[2] * q[2]] });
+  const front = plOf([-w[0], 0, -w[2]], p(0, 0, y0)), left = plOf([-u[0], 0, -u[2]], p(0, 0, y0)), right = plOf([u[0], 0, u[2]], p(L, 0, y0));
   // щели между досками и уголки-рейки
   for (const k of [1, 2]) {
     const y = y0 + (h * k) / 3;
-    prims.push(S.line(p(0, -0.002, y), p(L, -0.002, y), sl, sw));
-    prims.push(S.line(p(L + 0.002, 0, y), p(L + 0.002, Wd, y), sl, sw));
-    prims.push(S.line(p(-0.002, 0, y), p(-0.002, Wd, y), sl, sw));
+    prims.push(S.line(p(0, -0.002, y), p(L, -0.002, y), sl, sw, front));
+    prims.push(S.line(p(L + 0.002, 0, y), p(L + 0.002, Wd, y), sl, sw, right));
+    prims.push(S.line(p(-0.002, 0, y), p(-0.002, Wd, y), sl, sw, left));
   }
-  for (const [a, b] of [[0, 0], [L, 0], [0, Wd], [L, Wd]]) prims.push(S.line(p(a, b, y0), p(a, b, y0 + h), dark(c, 0.25), pxw(S, 0.07, zc)));
-  prims.push(S.line(p(0.02, -0.003, y0 + 0.03), p(L - 0.02, -0.003, y0 + h - 0.03), dark(c, 0.2), pxw(S, 0.05, zc)));
+  for (const [a, b, pl] of [[0, 0, front], [L, 0, front], [0, Wd, left], [L, Wd, right]]) prims.push(S.line(p(a, b, y0), p(a, b, y0 + h), dark(c, 0.25), pxw(S, 0.07, zc), pl));
+  prims.push(S.line(p(0.02, -0.003, y0 + 0.03), p(L - 0.02, -0.003, y0 + h - 0.03), dark(c, 0.2), pxw(S, 0.05, zc), front));
   if (d.fill) { // плоды горкой
     const fr = d.fruit ?? 0.07, list = [];
     for (let i = 0; i < 40; i++) {
@@ -185,14 +188,16 @@ reg('pot', (S, d) => {
   const { X, Z } = d, Y = d.Y ?? 0, r = d.r ?? 0.2, h = d.h ?? r * 1.7, c = d.color || '#c0643a';
   const key = d.key ?? Z - r;
   if (d.bucket) cyl(S, X, Z, r, Y, Y + h, '#8a8c94', { key, bands: h / 3, spec: 0.5 });
-  else lathe(S, X, Z, PROFILES.pot(h, r), c, { y0: Y, key, top: '#4a3020' });
+  // матовая глина с фактурой (материал terracotta сцены, если он есть): гладкий горшок с бликом выглядел пластиковым
+  else lathe(S, X, Z, PROFILES.pot(h, r), c, { y0: Y, key, top: '#4a3020', spec: d.spec ?? 0.04, pmat: d.pmat ?? 'terracotta' });
   const fr = d.fr ?? r * 1.5;
   const prims = [], occ = d.occ ? [] : null;
   if (d.plant === 'tree') {
     prims.push(S.line([X, Y + h, Z], [X, Y + h + fr * 1.1, Z], '#5a3a24', pxw(S, 0.035, Z), { ink: true }));
     prims.push(...foliage(S, X, Y + h + fr * 0.9, Z, fr, { leaf: d.leaf || '#4f7a30', flower: d.flower || '#f2c838', flowers: 14, fs: 0.13, n: 10, occ }));
   } else prims.push(...foliage(S, X, Y + h * 0.85, Z, fr, { leaf: d.leaf, flower: d.flower, flowers: d.flowers ?? 18, n: d.n ?? 9, fs: d.fs, occ }));
-  const it = S.item(key - 0.02, prims, { name: 'plant' });
+  // крона пропускает часть света: тень от неё пятнистая, а не гладкий шар
+  const it = S.item(key - 0.02, prims, { name: 'plant', alpha: 0.65 });
   if (occ) occluders(S, it, occ);
 });
 /** Ящик-кашпо на стене или перилах: {x:[a,b], y, z, flower, leaf, trail} (фронтальный). */
@@ -207,7 +212,7 @@ reg('planter', (S, d) => {
     const m = Math.max(5, Math.round(L / 0.045));
     for (let k = 0; k < m; k++) prims.push(leaf(S, [x + Math.sin(k * 0.9 + i) * 0.04 + (rnd() - 0.5) * 0.05, y - (L * k) / m, z - 0.27], 0.04 + rnd() * 0.02));
   }
-  const it = S.item(z - (d.d ?? 0.25) - 0.02, prims, { name: 'planter_plants' });
+  const it = S.item(z - (d.d ?? 0.25) - 0.02, prims, { name: 'planter_plants', alpha: 0.65 });
   if (occ) occluders(S, it, occ);
 });
 /** Лист: ромбик, обращённый к камере, со случайным наклоном нормали и тоном. */
@@ -568,7 +573,7 @@ reg('signboard', (S, d) => {
   const ifr = S.frame(off(fr.at(d.a, d.b), dd + 0.004), F.u, F.v, d.w, d.h, F.n);
   const m = d.m ?? 0.07;
   prims.push(S.det(ifr, ifr.rect(m, m, d.w - 2 * m, d.h - 2 * m), d.color || '#f4ead0', { ink: true, sw: pxw(S, 0.012, outer[0][2]), spec: 0.2 }));
-  if (d.text) prims.push(textPrim(S, ifr, d.w / 2, d.h / 2 - (d.size ?? d.h * 0.55) * 0.36, d.text, d.size ?? d.h * 0.55, d.textColor || '#b8302a', { font: d.font || 'Impact, Arial Black, sans-serif', weight: 'bold', spacing: d.spacing, em: d.em }));
+  if (d.text) prims.push(textPrim(S, ifr, d.w / 2, d.h / 2 - (d.size ?? d.h * 0.55) * 0.36, d.text, d.size ?? d.h * 0.55, d.textColor || '#b8302a', { font: d.font || 'Impact, Arial Black, sans-serif', weight: d.weight || 'bold', spacing: d.spacing, em: d.em }));
   S.item(d.key ?? Math.min(...outer.map((p) => p[2])) - 0.01, prims, { name: 'signboard' });
   if (d.light) S.light(off(fr.at(d.a + d.w / 2, d.b + d.h / 2), 0.6), '#ffc070', d.light, 0.5, 'lamp');
 });

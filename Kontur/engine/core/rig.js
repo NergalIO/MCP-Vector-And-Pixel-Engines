@@ -1,6 +1,5 @@
 /** Мировые матрицы, двухзвенный IK, источники света. */
 import { Ctx } from './ctx.js';
-import { c3 } from './ease.js';
 import { DEG, clamp, mat } from './math.js';
 import { cameraModel } from './surface.js';
 import { propValue } from './values.js';
@@ -92,7 +91,7 @@ export function collectLights(scene, t = 0, opts = {}) {
     let hidden = false;
     for (let p = n.parent; p && !hidden; p = ctx.c.byId.get(p)?.parent) { const pn = ctx.c.byId.get(p); if (pn && propValue(pn, 'visible', t, ctx) === false) hidden = true; }
     if (hidden) continue;
-    let [x, y] = mat.apply(m, P('anchorX'), P('anchorY'));
+    const [x, y] = mat.apply(m, P('anchorX'), P('anchorY'));
     const k = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
     const l = { id: n.id, x, y, z: P('z'), color: P('color'), energy: P('energy') * clamp(P('opacity')), radius: P('radius') * k, falloff: P('falloff') ?? 1 };
     const p3 = P('p3'), c3 = scene.camera3d, cm = c3 && cameraModel({ dz: 0, ...c3 }, scene.width);
