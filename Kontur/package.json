@@ -1,8 +1,18 @@
 {
   "name": "kontur",
   "version": "0.2.0",
+  "private": true,
   "description": "Движок векторной анимации: ключевые кадры, морфинг, процедурное движение, MCP-сервер",
   "type": "module",
+  "files": [
+    "engine/",
+    "mcp/",
+    "player/",
+    "scripts/",
+    "docs/",
+    "examples/*.json",
+    "examples/assets/"
+  ],
   "main": "engine/kontur.js",
   "bin": {
     "kontur-mcp": "mcp/server.mjs",
@@ -13,6 +23,8 @@
     "preview": "node mcp/server.mjs --preview --scene examples/flow.json",
     "demos": "node examples/build-demos.mjs",
     "test": "node test/run.mjs",
+    "lint": "node scripts/lint.mjs && eslint .",
+    "typecheck": "tsc -p .",
     "build:page": "node scripts/build-artifact.mjs dist/kontur-studio.html",
     "test:golden": "node test/golden.mjs",
     "golden:update": "node test/golden.mjs --update",
@@ -22,11 +34,18 @@
     "docs:check": "node scripts/gen-docs.mjs --check"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "optionalDependencies": {
     "@resvg/resvg-js": "^2.6.2",
     "webgpu": "^0.6.2"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
+    "typescript": "^7.0.2"
+  }
 }

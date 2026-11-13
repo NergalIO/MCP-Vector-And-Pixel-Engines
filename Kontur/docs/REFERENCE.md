@@ -513,7 +513,7 @@ params, build})`, `registerMaterial(name, fn, doc)`, `registerProfile(name, fn)`
 | `expr` | Выражение | `prop` — свойство, `props` — несколько свойств, `code` — тело функции (t, v, n, i, ctx) |
 <!-- /gen:modifiers -->
 
-Таблицы выше собираются из реестров движка (`NODE_DEFS` в engine/core/types.js, `MODIFIERS` в engine/core/modifiers.js); JSON Schema сцены — [scene.schema.json](scene.schema.json). Модификатор `expr` исполняет безопасное подмножество JS (`const`/`let`, `if`/`else`, `return`, арифметика, тернарный оператор, `Math.*`); полный JavaScript — только в браузере или при `KONTUR_TRUST_EXPR=1` на сервере.
+Таблицы выше собираются из реестров движка (`NODE_DEFS` в engine/core/types.js, `MODIFIERS` в engine/core/modifiers.js); JSON Schema сцены — [scene.schema.json](scene.schema.json). Модификатор `expr` исполняет безопасное подмножество JS (`const`/`let`, `if`/`else`, `return`, арифметика, тернарный оператор, `Math.*`); полный JavaScript — только при `KONTUR_TRUST_EXPR=1` на сервере или после согласия в студии (кнопка «Доверять» разрешает ровно тот код, что был в сцене; изменённый код снова выключен). Без разрешения такой модификатор не действует.
 
 ## Пресеты
 `popIn`, `fadeOut`, `drawOn`, `morphSequence`, `float`, `pulse`, `stagger`, `typewriter`, `orbitRing` — макросы,

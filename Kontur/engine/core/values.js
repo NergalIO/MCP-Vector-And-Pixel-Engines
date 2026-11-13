@@ -11,7 +11,7 @@ const NO_MODS = new Map();
 export function modMapOf(node, c) {
   const mods = node.mods;
   if (!mods || !mods.length) return NO_MODS;
-  let mm = c.modMaps.get(node);
+  const mm = c.modMaps.get(node);
   if (mm && mm.src === mods && mm.len === mods.length) return mm.map;
   const map = new Map();
   mods.forEach((m, mi) => {

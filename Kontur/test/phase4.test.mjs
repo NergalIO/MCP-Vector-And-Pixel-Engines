@@ -5,7 +5,6 @@ import { createScene, ops, renderSVG, evaluate, validateStructure, validateScene
 import { matMul } from '../engine/core/ir.js';
 import { trimDash } from '../engine/core/paint.js';
 
-const strip = (svg) => svg.replace(/<defs>.*?<\/defs>|<defs\/>/, '');
 function walkerScene() {
   const sc = createScene({ width: 200, height: 100, duration: 4 });
   ops.addNode(sc, { id: 'w', type: 'group', props: { x: 30, y: 40 } });

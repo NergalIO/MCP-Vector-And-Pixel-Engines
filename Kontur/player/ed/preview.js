@@ -6,7 +6,8 @@ import { canvasBox } from './view.js';
 const pv = document.getElementById('pv');
 const ctx2 = pv.getContext('2d');
 const work = document.createElement('canvas'), wctx = work.getContext('2d', { willReadFrequently: true });
-let busy = false, again = false, srcCache = new Map(), mapped = null, mappedVer = -1;
+const srcCache = new Map();
+let busy = false, again = false, mapped = null, mappedVer = -1;
 
 on('frame preview scene view previewmode states', schedule);
 export function schedule() {
@@ -56,6 +57,7 @@ async function runDeferred() {
   if (q === litKey) return;
   await new Promise((r) => { clearTimeout(litTimer); litTimer = setTimeout(r, 350); });
   const r = await fetch('/lit.png?' + q);
+  if (r.status === 204) return; // кадр заменён более новым запросом (другая вкладка) — нарисуется при следующем
   if (!r.ok) { const msg = await r.text(); E.deferredPreview = false; emit('previewmode'); emit('toast', 'Отложенный свет: ' + msg.slice(0, 200)); return; }
   const img = await createImageBitmap(await r.blob());
   litKey = q;

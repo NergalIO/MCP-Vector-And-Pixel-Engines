@@ -50,7 +50,7 @@ export function compileTrack(keys, prop) {
 /** Индекс сегмента: наибольший i ∈ [0, n−2], для которого times[i] ≤ t (как прежний линейный поиск). */
 function segIndex(tr, t) {
   const T = tr.times, n = T.length;
-  let i = tr.hint;
+  const i = tr.hint;
   if (i < n - 1 && T[i] <= t && (i === n - 2 || t < T[i + 1])) return i;
   let lo = 0, hi = n - 2;
   while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (T[mid] <= t) lo = mid; else hi = mid - 1; }

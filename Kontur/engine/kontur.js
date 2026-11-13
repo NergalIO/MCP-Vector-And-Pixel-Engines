@@ -12,7 +12,7 @@ export { interpolate, sampleKeys } from './core/tracks.js';
 export { VERSION, propDefault, createScene, invalidate, invalidateNode, sceneMemo } from './core/model.js';
 export { NODE_TYPES, NODE_DEFS, COMMON_PROPS, registerNodeType, typeProps, typeAnimated } from './core/types.js';
 export { MODIFIERS, registerModifier, modIsStatic } from './core/modifiers.js';
-export { compileSafeExpr, compileExpr, setExprPolicy, exprPolicy, allowExprFunctions } from './core/expr.js';
+export { compileSafeExpr, compileExpr, setExprPolicy, exprPolicy, allowExprFunctions, trustExpr, untrustAllExpr, exprAllowed, exprNeedsJS, sceneJSExprs, untrustedExprs, MAX_EXPR_STRING } from './core/expr.js';
 export { RELIEF_DEFAULT, PASS_MODES, RENDER_MODES, modeInfo, registerRenderMode, surfaceAxes, resolveSurface, encodeNormal, encodePlaneD, encodeMatId, materialIndex, normalGradLayers, normalMapMatrix, CAMERA3D_DEFAULT, cameraModel } from './core/surface.js';
 export { DITHER_PATTERNS } from './core/paint.js';
 export { evaluate, symbolScene, instanceTime } from './core/evaluate.js';

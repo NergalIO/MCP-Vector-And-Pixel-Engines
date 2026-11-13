@@ -1,5 +1,5 @@
 // Kontur world3d — Построитель сцены Scene(): элементы (ключ художника), свет, окклюдеры, рамки граней, конструкторы примитивов.
-import { C, col } from './color.js';
+import { C } from './color.js';
 import { hashSeed } from './rng.js';
 import { sub, add, mul, dot, norm } from './geom.js';
 import { camera } from './camera.js';

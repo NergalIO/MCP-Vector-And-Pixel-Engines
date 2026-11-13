@@ -50,7 +50,7 @@ const linearOf = (m) => [m[0], m[1], m[2], m[3], 0, 0];
 export function duplicateSel() {
   const ids = topSel();
   if (!ids.length) return;
-  let out = [];
+  const out = [];
   edit('дубль', () => { for (const id of ids) out.push(...insertClones(cloneNodes([id]), node(id).parent ?? null, id)); });
   select(out);
 }

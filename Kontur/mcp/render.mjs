@@ -6,10 +6,11 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir, cpus } from 'node:os';
 import { join, resolve, isAbsolute, extname } from 'node:path';
-import { evaluate, treeToString, renderSVG, pixelOf, quantizeRGBA, collectLights } from '../engine/kontur.js';
+import { evaluate, treeToString, renderSVG, pixelOf, quantizeRGBA, collectLights, sceneJSExprs, exprAllowed } from '../engine/kontur.js';
 import { decodePNG, encodePNG, isPng, scaleDown } from './normals.mjs';
-import { fileStamp, toDataURI } from './files.mjs';
+import { fileStamp, toDataURI, stampCache } from './files.mjs';
 import { ambientRGB } from './scene_util.mjs';
+import { checkRaster } from './limits.mjs';
 // resvg рендерит в пуле потоков libuv: несколько кадров считаются параллельно
 if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = String(Math.min(8, Math.max(4, cpus().length - 2)));
 /** Сколько кадров растеризовать одновременно. */
@@ -18,9 +19,14 @@ export const PARALLEL = Math.max(1, +(process.env.UV_THREADPOOL_SIZE || 4));
 /* ---------------- растровые ассеты ---------------- */
 export const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.avif': 'image/avif' };
 const isRemote = (src) => /^(data:|https?:|blob:)/i.test(src);
-/** Путь к локальному файлу изображения (абсолютный или относительно baseDir), иначе null. */
+/** Расширение пути — картинка (IMAGE_MIME)? */
+export const isImagePath = (p) => !!IMAGE_MIME[extname(String(p)).toLowerCase()];
+/**
+ * Путь к локальному файлу изображения (абсолютный или относительно baseDir), иначе null. Только расширения картинок:
+ * ссылка в чужой сцене на ~/.ssh/id_rsa не должна встраиваться в экспорт (inlineAssets) и отдаваться превью.
+ */
 export function resolveSrc(src, baseDir) {
-  if (!src || typeof src !== 'string' || isRemote(src)) return null;
+  if (!src || typeof src !== 'string' || isRemote(src) || !isImagePath(src)) return null;
   const p = isAbsolute(src) ? src : resolve(baseDir || '.', src);
   return existsSync(p) ? p : null;
 }
@@ -52,11 +58,12 @@ export function imageSize(buf) {
   }
   return null;
 }
-const inlineCache = new Map();
+// data: URI картинок: по последней версии каждого файла, всего не больше 256 МБ текста
+const inlineCache = stampCache({ max: 1024, maxWeight: 256e6, weigh: (s) => s.length });
 export function fileToDataURI(p) {
+  if (!isImagePath(p)) throw new Error(`Встроить можно только картинку (${Object.keys(IMAGE_MIME).join(' ')}): ${p}`);
   const key = fileStamp(p);
-  if (!inlineCache.has(key)) inlineCache.set(key, toDataURI(readFileSync(p), IMAGE_MIME[extname(p).toLowerCase()]));
-  return inlineCache.get(key);
+  return inlineCache.get(p, key) ?? inlineCache.set(p, key, toDataURI(readFileSync(p), IMAGE_MIME[extname(p).toLowerCase()]));
 }
 /** Свойства растрового слоя со ссылками на картинки (у src бывают ещё и ключи анимации). */
 export const IMAGE_SRC_KEYS = ['src', 'normalSrc', 'heightSrc', 'emissiveSrc', 'specSrc'];
@@ -124,11 +131,27 @@ function findBrowser() {
 
 export const capabilities = { png: null, pngError: null, ffmpeg: false, candidates: {} };
 
+/*
+ * Внешние процессы (ffmpeg, растеризаторы) не переживают сервер: при выходе они завершаются, иначе ffmpeg остаётся
+ * ждать кадров в stdin, а на Windows ещё и держит недописанный файл.
+ */
+const children = new Set();
+function track(p) {
+  children.add(p);
+  p.on('close', () => children.delete(p));
+  p.on('error', () => children.delete(p));
+  return p;
+}
+process.on('exit', () => { for (const p of children) { try { p.kill('SIGKILL'); } catch {} } });
+/** Сколько внешних процессов сейчас запущено. */
+export const runningChildren = () => children.size;
+
 function run(cmd, args, input, timeout = 120000) {
   return new Promise((res, rej) => {
-    const p = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const p = track(spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }));
     const out = [], err = [];
-    const timer = setTimeout(() => { p.kill(); rej(new Error(`${cmd}: превышено время`)); }, timeout);
+    const timer = setTimeout(() => { p.kill('SIGKILL'); rej(new Error(`${cmd}: превышено время`)); }, timeout);
+    p.stdin.on('error', () => {}); // процесс закрылся раньше, чем прочитал ввод, — причина придёт в close
     p.stdout.on('data', (d) => out.push(d));
     p.stderr.on('data', (d) => err.push(d));
     p.on('error', (e) => { clearTimeout(timer); rej(e); });
@@ -139,12 +162,18 @@ function run(cmd, args, input, timeout = 120000) {
 
 const svgW = (svg) => +(/<svg[^>]*\swidth="([\d.]+)"/.exec(svg)?.[1] || 0);
 const svgH = (svg) => +(/<svg[^>]*\sheight="([\d.]+)"/.exec(svg)?.[1] || 0);
+/** Растр SVG шириной width (высота — по пропорциям корня) помещается в пределы limits.mjs? Размер неизвестен — решит растеризатор. */
+function checkSVGRaster(svg, width) {
+  const w0 = svgW(svg), h0 = svgH(svg), w = width || w0;
+  if (w) checkRaster(w, w0 && h0 ? (w * h0) / w0 : w);
+}
 // системные шрифты грузятся только для кадров с текстом — это заметная часть времени
 const resvgOpts = (svg, width) => ({ fitTo: width ? { mode: 'width', value: width } : { mode: 'original' }, font: { loadSystemFonts: svg.includes('<text') } });
 const resvgRender = async (svg, width) => (resvgAsync ? resvgAsync(svg, resvgOpts(svg, width)) : new resvg(svg, resvgOpts(svg, width)).render());
 /** SVG → { width, height, pixels } с умножением на альфу (только resvg-js, иначе null): запасные слои растеризатора GPU. */
 export async function svgToPremul(svg, width) {
   if (!resvg) return null;
+  checkSVGRaster(svg, width);
   const r = await resvgRender(svg, width);
   return { width: r.width, height: r.height, pixels: r.pixels };
 }
@@ -178,6 +207,7 @@ const BACKENDS = {
 };
 const PROBE = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#f00"/></svg>';
 
+/** @type {Promise<string | null> | null} */
 let probing = null;
 /** Найти работающий растеризатор (один раз). KONTUR_RASTER=resvg-js|rsvg-convert|imagemagick|browser — принудительно. */
 export function probeRaster() {
@@ -226,6 +256,7 @@ export const rasterNote = () => `PNG недоступен: ${capabilities.pngErr
 
 /** SVG-строка → PNG Buffer. */
 export async function svgToPng(svg, width) {
+  checkSVGRaster(svg, width);
   const name = await requireRaster();
   return BACKENDS[name](svg, width);
 }
@@ -235,6 +266,7 @@ export async function svgToPng(svg, width) {
  * напрямую; остальные растеризаторы — через PNG).
  */
 export async function svgToRGBA(svg, width) {
+  checkSVGRaster(svg, width);
   const name = await requireRaster();
   if (name === 'resvg-js') { const r = await resvgRender(svg, width); return { width: r.width, height: r.height, data: demultiply(r.pixels) }; }
   return decodePNG(await BACKENDS[name](svg, width));
@@ -274,6 +306,7 @@ export async function mapLimit(list, limit, fn) {
 
 /** Увеличить RGBA-картинку без сглаживания до размера w×h. */
 export function upscaleNearest(img, w, h) {
+  checkRaster(w, h);
   const out = new Uint8Array(w * h * 4), sx = img.width / w, sy = img.height / h;
   for (let y = 0; y < h; y++) {
     const row = Math.min(img.height - 1, Math.floor((y + 0.5) * sy)) * img.width;
@@ -359,8 +392,10 @@ export function contactSheetSVG(scene, times, { cols, cellWidth = 480, states } 
 /**
  * Экспорт видео/GIF через ffmpeg: кадры идут сырыми RGBA в stdin (без PNG на диске), несколько кадров
  * растеризуются параллельно, порядок сохраняется; статичные поддеревья кэшируются между кадрами.
+ * onProgress(готово, всего) — после каждого кадра; signal — отмена: ffmpeg останавливается, недописанный файл удаляется.
  */
-export async function exportVideo(scene, path, { fps = scene.fps || 30, width = scene.width, start = 0, end = scene.duration, format, onProgress, lit, baseDir } = {}) {
+export async function exportVideo(scene, path, { fps = scene.fps || 30, width = scene.width, start = 0, end = scene.duration, format, onProgress, signal, lit, baseDir } = {}) {
+  signal?.throwIfAborted();
   await probeRaster();
   if (!capabilities.ffmpeg) throw new Error('Для экспорта видео нужен ffmpeg в PATH');
   await requireRaster('для экспорта видео');
@@ -373,7 +408,7 @@ export async function exportVideo(scene, path, { fps = scene.fps || 30, width = 
   const codec = format === 'gif' ? ['-vf', `fps=${Math.min(fps, 30)},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a`, '-loop', '0']
     : format === 'webm' ? ['-vf', even, '-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '30', '-pix_fmt', 'yuv420p']
     : ['-vf', even, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-movflags', '+faststart'];
-  const p = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${first.width}x${first.height}`, '-framerate', String(fps), '-i', '-', ...codec, path], { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
+  const p = track(spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${first.width}x${first.height}`, '-framerate', String(fps), '-i', '-', ...codec, path], { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true }));
   const err = [];
   p.stderr.on('data', (x) => { err.push(x); if (err.length > 64) err.shift(); });
   let dead = null;
@@ -383,26 +418,40 @@ export async function exportVideo(scene, path, { fps = scene.fps || 30, width = 
   });
   done.catch(() => {});
   p.stdin.on('error', () => {}); // ffmpeg упал — причина придёт в close
-  const write = (im) => new Promise((res) => {
+  const write = (im) => new Promise((res, rej) => {
     if (dead) return res();
-    if (im.width !== first.width || im.height !== first.height) throw new Error(`кадр ${im.width}×${im.height} вместо ${first.width}×${first.height}`);
+    if (im.width !== first.width || im.height !== first.height) return rej(new Error(`кадр ${im.width}×${im.height} вместо ${first.width}×${first.height}`));
     if (p.stdin.write(Buffer.from(im.data.buffer, im.data.byteOffset, im.data.byteLength))) res(); else p.stdin.once('drain', res);
   });
+  // кадры считаются наперёд; ошибка кадра, которого ещё не ждут, не должна стать необработанной (это роняет процесс)
+  const ahead = (j) => { const pr = frame(j); pr.catch(() => {}); return pr; };
   const inflight = new Map([[0, Promise.resolve(first)]]);
-  for (let i = 0; i < n && !dead; i++) {
-    for (let j = i; j < Math.min(n, i + PARALLEL); j++) if (!inflight.has(j)) inflight.set(j, frame(j));
-    const im = await inflight.get(i); inflight.delete(i);
-    await write(im);
-    if (onProgress && i % 30 === 0) onProgress(i, n);
+  try {
+    for (let i = 0; i < n && !dead; i++) {
+      signal?.throwIfAborted();
+      for (let j = i; j < Math.min(n, i + PARALLEL); j++) if (!inflight.has(j)) inflight.set(j, ahead(j));
+      const im = await inflight.get(i); inflight.delete(i);
+      await write(im);
+      onProgress?.(i + 1, n);
+    }
+    p.stdin.end();
+    await done;
+  } catch (e) {
+    // кадр не посчитался или ffmpeg упал: ffmpeg не остаётся ждать данных, недописанный файл удаляется
+    p.stdin.destroy(); p.kill('SIGKILL');
+    await done.catch(() => {});
+    rmSync(path, { force: true });
+    throw e;
   }
-  p.stdin.end();
-  await done;
   return { frames: n, path };
 }
 
 /** Автономный HTML-плеер: движок + сцена в одном файле. */
+// JS-выражения expr исполняются в плеере, только если их разрешает политика сервера в момент экспорта
+// (KONTUR_TRUST_EXPR=1 или trustExpr): плеер получает список доверенного кода.
 export function standaloneHTML(scene, { title = 'Kontur' } = {}) {
   const engine = bundleEngine();
+  const trusted = sceneJSExprs(scene).filter(exprAllowed);
   const engineB64 = Buffer.from(engine).toString('base64');
   const esc = (s) => String(s).replace(/</g, '&lt;');
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -416,9 +465,11 @@ button{background:#23233a;color:#fff;border:0;border-radius:6px;padding:6px 12px
 <div id="stage"><div id="view"></div></div>
 <div id="bar"><button id="pp">❚❚</button><input id="sc" type="range" min="0" max="${scene.duration}" step="0.001" value="0"><span id="t"></span></div>
 <script type="application/json" id="scene">${JSON.stringify(scene).replace(/</g, '\\u003c')}</script>
+<script type="application/json" id="trust">${JSON.stringify(trusted).replace(/</g, '\\u003c')}</script>
 <script type="module">
 const url = URL.createObjectURL(new Blob([atob('${engineB64}')].map(s=>new TextDecoder().decode(Uint8Array.from(s,c=>c.charCodeAt(0)))), {type:'text/javascript'}));
-const { Player } = await import(url);
+const { Player, trustExpr } = await import(url);
+trustExpr(JSON.parse(document.getElementById('trust').textContent));
 const scene = JSON.parse(document.getElementById('scene').textContent);
 const p = new Player(document.getElementById('view'), scene);
 const sc = document.getElementById('sc'), tt = document.getElementById('t'), pp = document.getElementById('pp');

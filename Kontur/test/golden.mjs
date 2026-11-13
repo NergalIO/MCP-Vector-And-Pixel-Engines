@@ -13,7 +13,6 @@ const { renderSVG, evaluate, treeToString } = await import(engineUrl);
 
 const root = new URL('..', import.meta.url);
 const file = new URL('test/golden.json', root);
-const MODES = ['color', 'height', 'normal', 'plane', 'planeD', 'emissive', 'ink', 'cover', 'matId', 'mask:chr'];
 const CASES = [
   { f: 'examples/flow.json', modes: ['color', 'height'], times: 6 },
   { f: 'examples/liquid.json', modes: ['color', 'height'], times: 6 },

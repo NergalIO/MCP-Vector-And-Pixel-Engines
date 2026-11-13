@@ -131,7 +131,6 @@ export function shadeSurface(G, st, { direct, ambient, bvh, scene, t, states, se
     const [lx, ly, lz] = lt.p3, r = lt.radius;
     const rect = lampRect(G, lx, ly, lz, r);
     if (!rect) continue;
-    const [xa, xb, ya, yb] = rect;
     litCount++;
     const shadowed = (lt.shadows ?? lt.group === 'lamp') && st.lightShadows && bvh;
     let vis = null;

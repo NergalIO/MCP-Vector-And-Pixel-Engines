@@ -27,7 +27,7 @@ if (mode === 'frame') {
   writeFileSync(out, out.endsWith('.svg') ? svg : await svgToPng(svg));
 } else if (mode === 'video') {
   const [out, fps, width] = a;
-  const r = await exportVideo(scene, out, { fps: fps ? +fps : undefined, width: width ? +width : undefined, onProgress: (i, n) => process.stderr.write(`\r${i}/${n}`) });
+  const r = await exportVideo(scene, out, { fps: fps ? +fps : undefined, width: width ? +width : undefined, onProgress: (i, n) => { if (i % 30 === 0 || i === n) process.stderr.write(`\r${i}/${n}`); } });
   console.error(`\n✓ ${r.frames} кадров → ${r.path}`);
 } else if (mode === 'html') {
   writeFileSync(a[0], standaloneHTML(scene));

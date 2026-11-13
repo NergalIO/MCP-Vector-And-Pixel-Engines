@@ -13,7 +13,7 @@ import { gpuGtao, gpuSsao } from './gpu-kernels.mjs';
 
 /** Прежний SSAO: Float32 n (1 — открыто). */
 export function ssao(G, o) {
-  const { W, H, n, hw, hh, hn, mask, Px, Py, Pz, PNx, PNy, PNz } = G;
+  const { W, H, n, hw, hh, hn, Px, Py, Pz } = G;
   // вне маски — точка «бесконечно далеко» (0, 0, 1e4): она ничего не заслоняет
   const hx = halfOf(G, Px, 0), hy = halfOf(G, Py, 0), hz = halfOf(G, Pz, 1e4), [hnx, hny, hnz] = halves(G, 'PNx', 'PNy', 'PNz');
   const occA = f32(hn), rad = o.radius ?? 0.9, offs = [];
@@ -40,7 +40,7 @@ export function ssao(G, o) {
  * o: radius (м, 0.9), strength, dirs (4), steps (8 на сторону), falloff (доля радиуса без затухания, 0.6), bent, bias.
  */
 export function gtao(G, o) {
-  const { W, H, n, hw, hh, hn, mask, Px, Py, Pz, PNx, PNy, PNz, Nx, Ny, Nz, Dp } = G;
+  const { W, H, n, hw, hh, hn, mask, PNx, PNy, PNz, Nx, Ny, Nz } = G;
   const rad = o.radius ?? 0.9, dirs = Math.max(2, o.dirs | 0 || 4), steps = Math.max(3, o.steps | 0 || 8), fall0 = rad * clamp01(o.falloff ?? 0.6), bias = o.bias ?? 0.04;
   const fHalf = G.cam.f / 2, maxPx = 64 * Math.max(1, hw / 960);
   const [hm, hx, hy, hz, hnx, hny, hnz, hD] = halves(G, 'mask', 'Px', 'Py', 'Pz', 'PNx', 'PNy', 'PNz', 'Dp');

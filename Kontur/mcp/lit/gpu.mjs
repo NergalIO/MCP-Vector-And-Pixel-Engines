@@ -44,6 +44,8 @@ export function initGPU() {
       else if (m.lost) failure = `устройство потеряно: ${m.lost}`;
     });
     worker.on('error', (e) => { failure = `поток GPU: ${e.message}`; worker.unref(); resolve(null); });
+    // поток завершился (сбой драйвера, нехватка памяти): дальше этапы — на процессоре, а не ожидание ответа 2 минуты
+    worker.on('exit', (code) => { failure = failure || `поток GPU завершился (код ${code})`; resolve(null); });
     worker.postMessage({ type: 'init' }); // пока идёт запуск, поток держит процесс (unref — после ответа)
   });
   return ready;

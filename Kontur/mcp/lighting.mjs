@@ -29,6 +29,7 @@ import { warm, task, frameArena, POOL, THREADS } from './lit/pool.mjs';
 import { initGPU, gpuInfo, gpuResident, gpuReleaseResident, rasterWanted } from './lit/gpu.mjs';
 import { treeToGeometry } from './lit/raster-geom.mjs';
 import { initRasterGPU, rasterize, renderLayers } from './lit/gpu-raster.mjs';
+import { checkRaster } from './limits.mjs';
 
 export { LIGHT_PRESETS, STYLE_TYPES, TONEMAPS, resolveLighting, resolveStyle, effectsSummary } from './lit/params.mjs';
 export { gauss } from './lit/filters.mjs';
@@ -207,6 +208,7 @@ async function litFrame(scene, t, opts, arena) {
   scene = sceneMemo(scene, `h2n|${opts.baseDir || ''}`, (s) => heightToNormalSrc(s, opts.baseDir));
   const W0 = scene.width, H0 = scene.height;
   const W = Math.max(16, Math.round(opts.width ?? W0)), H = Math.max(9, Math.round((W * H0) / W0)), n = W * H;
+  checkRaster(W, H, 'кадр со светом'); // десятки полей float32 на пиксель: падение по памяти хуже понятной ошибки
   const st = resolveLighting(scene, opts.lighting);
   const style = resolveStyle(scene, opts.style);
   const chrTag = st.characters.tag;

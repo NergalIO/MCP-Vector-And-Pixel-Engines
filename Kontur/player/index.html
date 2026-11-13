@@ -78,6 +78,7 @@ header { grid-area: top; display: flex; align-items: center; gap: 10px; padding:
 .status { position: absolute; left: 10px; bottom: 10px; font-family: var(--mono); font-size: 11px; color: var(--mute); background: rgba(21,24,35,.85); padding: 3px 7px; border-radius: 6px; pointer-events: none }
 .banner { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); background: #3a1d22; border: 1px solid var(--rec); color: #ffd0d0; padding: 4px 6px 4px 12px; border-radius: 8px; display: flex; gap: 10px; align-items: center; font-size: 12px; z-index: 2 }
 .banner.scope { background: #1f2440; border-color: var(--accent); color: var(--text) }
+.banner.expr { background: #3a3014; border-color: #c9a227; color: #ffe9a8 }
 .err { position: absolute; left: 12px; right: 12px; top: 12px; background: #2a1518; border: 1px solid var(--bad); color: var(--bad); padding: 8px 10px; border-radius: 6px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; z-index: 3 }
 #toast { position: fixed; left: 50%; bottom: 210px; transform: translateX(-50%); background: #23283c; border: 1px solid var(--line); padding: 7px 14px; border-radius: 8px; z-index: 50; max-width: 70vw; box-shadow: 0 8px 30px rgba(0,0,0,.4) }
 #toast.bad { border-color: var(--bad); color: #ffd6d6 }

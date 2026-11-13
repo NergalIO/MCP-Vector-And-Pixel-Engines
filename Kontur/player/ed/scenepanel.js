@@ -1,5 +1,6 @@
 // Вкладка «Сцена»: размеры и время, состояния (переключение и запись), клипы, пиксельный режим, свет, дизеринг, правки поверх скрипта.
-import { K, E, on, emit, edit, esc, toast, node, stateValue, setVal } from './core.js';
+import { K, E, on, emit, edit, toast, stateValue } from './core.js';
+import { html, joinHTML, setHTML } from './html.js';
 import { resetEdits } from './inspector.js';
 import { syncClips } from './timeline.js';
 
@@ -8,59 +9,63 @@ let raf = 0;
 on('scene replace live states', () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (!document.getElementById('pane-scene').hidden) render(); }); });
 export function showScenePanel() { render(); }
 
-const num = (id, label, v, title = '') => `<div class="fld"><span></span><label title="${esc(title)}">${label}</label><div class="ctl"><input id="${id}" value="${esc(v ?? '')}"></div></div>`;
-const chk = (id, label, v, title = '') => `<div class="fld"><span></span><label title="${esc(title)}">${label}</label><div class="ctl"><input type="checkbox" id="${id}" ${v ? 'checked' : ''}></div></div>`;
-const col = (id, label, v) => `<div class="fld"><span></span><label>${label}</label><div class="ctl"><input type="color" id="${id}-c" value="${/^#[0-9a-f]{6}$/i.test(v || '') ? v : '#000000'}"><input id="${id}" value="${esc(typeof v === 'object' ? JSON.stringify(v) : v ?? '')}"></div></div>`;
+// разметка — шаблоны html``: подстановки (имена состояний, клипов, узлов, пути) экранируются
+const num = (id, label, v, title = '') => html`<div class="fld"><span></span><label title="${title}">${label}</label><div class="ctl"><input id="${id}" value="${v ?? ''}"></div></div>`;
+const chk = (id, label, v, title = '') => html`<div class="fld"><span></span><label title="${title}">${label}</label><div class="ctl"><input type="checkbox" id="${id}" ${v ? 'checked' : ''}></div></div>`;
+const col = (id, label, v) => html`<div class="fld"><span></span><label>${label}</label><div class="ctl"><input type="color" id="${id}-c" value="${/^#[0-9a-f]{6}$/i.test(v || '') ? v : '#000000'}"><input id="${id}" value="${typeof v === 'object' ? JSON.stringify(v) : v ?? ''}"></div></div>`;
 
 function render() {
   const s = E.scene;
-  let h = `<h4>Кадр и время</h4><div class="pair">${num('s-w', 'Ширина', s.width)}${num('s-h', 'Высота', s.height)}</div><div class="pair">${num('s-dur', 'Длина, с', s.duration)}${num('s-fps', 'Кадров/с', s.fps)}</div>`;
-  h += col('s-bg', 'Фон', s.background) + chk('s-loop', 'Повтор', s.loop !== false);
+  const h = [html`<h4>Кадр и время</h4><div class="pair">${num('s-w', 'Ширина', s.width)}${num('s-h', 'Высота', s.height)}</div><div class="pair">${num('s-dur', 'Длина, с', s.duration)}${num('s-fps', 'Кадров/с', s.fps)}</div>`];
+  h.push(col('s-bg', 'Фон', s.background), chk('s-loop', 'Повтор', s.loop !== false));
 
   // состояния
-  h += `<h4>Состояния объектов</h4><div class="note">Именованные варианты: дверь открыта/закрыта, лампа вкл/выкл. Кнопка ● — запись: правки на холсте и в свойствах идут в этот вариант.</div>`;
+  h.push(html`<h4>Состояния объектов</h4><div class="note">Именованные варианты: дверь открыта/закрыта, лампа вкл/выкл. Кнопка ● — запись: правки на холсте и в свойствах идут в этот вариант.</div>`);
   for (const g of s.states || []) {
-    const cur = stateValue(g);
-    h += `<div class="grp"><div class="row"><b>${esc(g.name)}</b><span class="spacer"></span><button data-delgroup="${esc(g.name)}" title="Удалить группу">×</button></div><div>`;
-    for (const [v, patch] of Object.entries(g.values || {})) {
+    const cur = stateValue(g), def = g.default ?? Object.keys(g.values || {})[0];
+    const chips = Object.entries(g.values || {}).map(([v, patch]) => {
       const rec = E.record?.group === g.name && E.record?.value === v;
       const cnt = Object.keys(patch || {}).length;
-      h += `<span class="chip${v === cur ? ' cur' : ''}" data-state="${esc(g.name)}" data-val="${esc(v)}" title="Объектов меняется: ${cnt}${(g.default ?? Object.keys(g.values)[0]) === v ? ' · по умолчанию' : ''}">${(g.default ?? Object.keys(g.values)[0]) === v ? '★ ' : ''}${esc(v)}<button class="rec${rec ? ' on' : ''}" data-rec title="${rec ? 'Остановить запись' : 'Записывать правки в этот вариант'}">●</button></span>`;
-    }
-    h += `</div><div class="row" style="margin-top:4px"><input data-newval="${esc(g.name)}" placeholder="новый вариант" style="flex:1"><button data-default="${esc(g.name)}" title="Сделать показанный вариант основным (★)">★ основной</button><button data-delval="${esc(g.name)}" title="Удалить показанный вариант">− вариант</button></div></div>`;
+      return html`<span class="chip${v === cur ? ' cur' : ''}" data-state="${g.name}" data-val="${v}" title="Объектов меняется: ${cnt}${def === v ? ' · по умолчанию' : ''}">${def === v ? '★ ' : ''}${v}<button class="rec${rec ? ' on' : ''}" data-rec title="${rec ? 'Остановить запись' : 'Записывать правки в этот вариант'}">●</button></span>`;
+    });
+    h.push(html`<div class="grp"><div class="row"><b>${g.name}</b><span class="spacer"></span><button data-delgroup="${g.name}" title="Удалить группу">×</button></div><div>${chips}</div><div class="row" style="margin-top:4px"><input data-newval="${g.name}" placeholder="новый вариант" style="flex:1"><button data-default="${g.name}" title="Сделать показанный вариант основным (★)">★ основной</button><button data-delval="${g.name}" title="Удалить показанный вариант">− вариант</button></div></div>`);
   }
-  h += `<div class="row"><input id="s-newgroup" placeholder="новая группа (например, door)" style="flex:1"><button id="s-addgroup">+ группа</button></div>`;
+  h.push(html`<div class="row"><input id="s-newgroup" placeholder="новая группа (например, door)" style="flex:1"><button id="s-addgroup">+ группа</button></div>`);
 
   // клипы
-  h += `<h4>Клипы</h4>`;
+  h.push(html`<h4>Клипы</h4>`);
   for (const c of s.clips || []) {
-    h += `<div class="grp" data-clip="${esc(c.name)}"><div class="row"><input data-c="name" value="${esc(c.name)}" style="flex:1" aria-label="Имя клипа"><button data-delclip title="Удалить клип">×</button></div>`
-      + `<div class="row" style="margin-top:4px"><span class="note">с</span><input data-c="start" value="${c.start}" style="width:58px"><span class="note">до</span><input data-c="end" value="${c.end}" style="width:58px"><span class="note">fps</span><input data-c="fps" value="${c.fps ?? ''}" placeholder="—" style="width:42px"><label class="note"><input type="checkbox" data-c="loop" ${c.loop !== false ? 'checked' : ''}> повтор</label></div>`
-      + `<div class="row" style="margin-top:4px"><span class="note">потом</span><select data-c="next"><option value="">—</option>${(s.clips || []).filter((x) => x.name !== c.name).map((x) => `<option ${x.name === c.next ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div></div>`;
+    const next = (s.clips || []).filter((x) => x.name !== c.name).map((x) => html`<option ${x.name === c.next ? 'selected' : ''}>${x.name}</option>`);
+    h.push(html`<div class="grp" data-clip="${c.name}"><div class="row"><input data-c="name" value="${c.name}" style="flex:1" aria-label="Имя клипа"><button data-delclip title="Удалить клип">×</button></div>`,
+      html`<div class="row" style="margin-top:4px"><span class="note">с</span><input data-c="start" value="${c.start}" style="width:58px"><span class="note">до</span><input data-c="end" value="${c.end}" style="width:58px"><span class="note">fps</span><input data-c="fps" value="${c.fps ?? ''}" placeholder="—" style="width:42px"><label class="note"><input type="checkbox" data-c="loop" ${c.loop !== false ? 'checked' : ''}> повтор</label></div>`
+      , html`<div class="row" style="margin-top:4px"><span class="note">потом</span><select data-c="next"><option value="">—</option>${next}</select></div></div>`);
   }
-  if (!(s.clips || []).length) h += `<div class="note">Клипов нет: «+ клип» на таймлайне создаёт клип от плейхеда.</div>`;
+  if (!(s.clips || []).length) h.push(html`<div class="note">Клипов нет: «+ клип» на таймлайне создаёт клип от плейхеда.</div>`);
 
   // пиксели
   const px = s.pixel || {};
-  h += `<h4>Пиксельный режим</h4>${chk('px-on', 'Включён', px.enabled, 'Кадр рисуется в низком разрешении без сглаживания и увеличивается «ближайшим»')}`;
-  h += `${num('px-size', 'Пиксель', px.size ?? 4, 'Размер пикселя в единицах сцены')}<div class="note" style="margin-left:18px">${s.width}×${s.height} → ${Math.round(s.width / (px.size || 4))}×${Math.round(s.height / (px.size || 4))}</div>`;
-  h += `<div class="fld"><span></span><label title="Цвета через запятую или пробел; пусто — без палитры">Палитра</label><div class="ctl"><input id="px-pal" value="${esc((px.palette || []).join(' '))}" placeholder="#000 #fff …"></div></div>${chk('px-aa', 'Сглаживание', px.aa)}`;
+  h.push(html`<h4>Пиксельный режим</h4>`, chk('px-on', 'Включён', px.enabled, 'Кадр рисуется в низком разрешении без сглаживания и увеличивается «ближайшим»'));
+  h.push(num('px-size', 'Пиксель', px.size ?? 4, 'Размер пикселя в единицах сцены'), html`<div class="note" style="margin-left:18px">${s.width}×${s.height} → ${Math.round(s.width / (px.size || 4))}×${Math.round(s.height / (px.size || 4))}</div>`);
+  h.push(html`<div class="fld"><span></span><label title="Цвета через запятую или пробел; пусто — без палитры">Палитра</label><div class="ctl"><input id="px-pal" value="${(px.palette || []).join(' ')}" placeholder="#000 #fff …"></div></div>`, chk('px-aa', 'Сглаживание', px.aa));
 
   // свет
   const lights = s.nodes.filter((n) => n.type === 'light');
-  h += `<h4>Свет</h4>${col('s-amb', 'Окружение', s.ambient || '#4a4f5c')}<div class="note">${lights.length ? `Источников: ${lights.map((l) => `<a href="#" data-goto="${esc(l.id)}">${esc(l.id)}</a>`).join(', ')}. Превью — кнопка «Свет» под холстом.` : 'Источников нет: инструмент «Свет» (J) ставит точечный свет. В Godot он станет PointLight2D.'}</div>`;
+  const lightNote = lights.length
+    ? html`Источников: ${joinHTML(lights.map((l) => html`<a href="#" data-goto="${l.id}">${l.id}</a>`), ', ')}. Превью — кнопка «Свет» под холстом.`
+    : 'Источников нет: инструмент «Свет» (J) ставит точечный свет. В Godot он станет PointLight2D.';
+  h.push(html`<h4>Свет</h4>${col('s-amb', 'Окружение', s.ambient || '#4a4f5c')}<div class="note">${lightNote}</div>`);
 
   // дизеринг
   const d = s.dither || {};
-  h += `<h4>Дизеринг теней</h4>${chk('d-on', 'Включён', d.enabled, 'Растр вместо плоской заливки у слоёв с «Тень (растр)»')}<div class="fld"><span></span><label>Узор</label><div class="ctl"><select id="d-pat">${Object.keys(K.DITHER_PATTERNS).map((p) => `<option ${p === (d.pattern || 'bayer4') ? 'selected' : ''}>${p}</option>`).join('')}</select></div></div>${num('d-cell', 'Ячейка, px', d.cell ?? 3)}`;
+  h.push(html`<h4>Дизеринг теней</h4>${chk('d-on', 'Включён', d.enabled, 'Растр вместо плоской заливки у слоёв с «Тень (растр)»')}<div class="fld"><span></span><label>Узор</label><div class="ctl"><select id="d-pat">${Object.keys(K.DITHER_PATTERNS).map((p) => html`<option ${p === (d.pattern || 'bayer4') ? 'selected' : ''}>${p}</option>`)}</select></div></div>${num('d-cell', 'Ячейка, px', d.cell ?? 3)}`);
 
   // правки
   if (E.edits?.mode) {
-    h += `<h4>Правки поверх скрипта</h4><div class="note">Файл: ${esc(E.edits.path || '')}<br>Изменено объектов: ${E.edits.count || 0}. Исходный файл сцены не перезаписывается: build-скрипт может пересобрать сцену, правки лягут сверху.</div>`;
-    if (E.edits.warnings?.length) h += `<ul class="warnlist">${E.edits.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>`;
-    h += `<div class="btns"><button id="e-reset" ${E.edits.count ? '' : 'disabled'}>Сбросить все правки</button></div>`;
+    h.push(html`<h4>Правки поверх скрипта</h4><div class="note">Файл: ${E.edits.path || ''}<br>Изменено объектов: ${E.edits.count || 0}. Исходный файл сцены не перезаписывается: build-скрипт может пересобрать сцену, правки лягут сверху.</div>`);
+    if (E.edits.warnings?.length) h.push(html`<ul class="warnlist">${E.edits.warnings.map((w) => html`<li>${w}</li>`)}</ul>`);
+    h.push(html`<div class="btns"><button id="e-reset" ${E.edits.count ? '' : 'disabled'}>Сбросить все правки</button></div>`);
   }
-  root.innerHTML = h;
+  setHTML(root, h);
   wire();
 }
 
@@ -159,7 +164,7 @@ function wire() {
   for (const id of ['px-on', 'px-aa', 'px-size', 'px-pal']) { $(id).onchange = setPx; $(id).onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') e.target.blur(); }; }
 
   // дизеринг
-  const setD = () => edit('дизеринг', () => { s.dither = { pattern: 'bayer4', cell: 3, density: 0.6, angle: 90, ...(s.dither || {}), enabled: $('d-on').checked, pattern: $('d-pat').value, cell: Number($('d-cell').value) || 3 }; });
+  const setD = () => edit('дизеринг', () => { s.dither = { density: 0.6, angle: 90, ...(s.dither || {}), enabled: $('d-on').checked, pattern: $('d-pat').value, cell: Number($('d-cell').value) || 3 }; });
   for (const id of ['d-on', 'd-pat', 'd-cell']) $(id).onchange = setD;
 
   for (const a of root.querySelectorAll('[data-goto]')) a.onclick = (e) => { e.preventDefault(); emit('goto', a.dataset.goto); };

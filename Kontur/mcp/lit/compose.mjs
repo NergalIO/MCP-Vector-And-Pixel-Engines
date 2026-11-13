@@ -3,7 +3,7 @@
 // Попиксельная сборка считается полосами строк на всех ядрах (pool.mjs).
 import { clamp01, smoothstep, Y3, lin22, LIN8 } from './util.mjs';
 import { lightColors } from './shade.mjs';
-import { rows, f32 } from './pool.mjs';
+import { rows } from './pool.mjs';
 import { makeRng } from '../../engine/kontur.js';
 
 /** Цвет кадра col (линейный HDR, n·3) и свечение emL (n·3). */

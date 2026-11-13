@@ -66,24 +66,52 @@ export const workerExecArgv = () => {
 let workers = null;
 const pending = new Map();
 let taskSeq = 0;
+/*
+ * Упавший воркер (исключение вне задачи, нехватка памяти, выход) убирается из пула, его задачи отклоняются (task
+ * досчитывает их в главном потоке), а на его место при следующем этапе запускается новый. Если воркеры падают
+ * подряд (больше RESPAWN_MAX за RESPAWN_WINDOW мс), новые не запускаются: пул работает меньшим числом потоков,
+ * а без воркеров — в главном потоке. Причина — в poolInfo().
+ */
+const RESPAWN_MAX = 5, RESPAWN_WINDOW = 60000;
+const deaths = []; // времена последних падений
+let deathCount = 0, lastDeath = null;
+const canRespawn = () => deaths.filter((t) => Date.now() - t < RESPAWN_WINDOW).length < RESPAWN_MAX;
+/** Состояние пула: { threads, workers, deaths (за всё время), lastDeath, respawn (запускаются ли новые) }. */
+export const poolInfo = () => ({ threads: THREADS, workers: workers?.length ?? 0, deaths: deathCount, lastDeath, respawn: canRespawn() });
 
+function spawn() {
+  const w = new Worker(new URL('./worker.mjs', import.meta.url), { execArgv: workerExecArgv() });
+  w.busy = 0;
+  w.on('message', (m) => {
+    const p = pending.get(m.id);
+    if (!p) return;
+    pending.delete(m.id);
+    if (--w.busy === 0) w.unref();
+    if (m.error) p.reject(new Error(m.error)); else p.resolve(m.result);
+  });
+  let gone = false;
+  const die = (why) => {
+    if (gone) return;
+    gone = true;
+    deathCount++; deaths.push(Date.now()); if (deaths.length > RESPAWN_MAX) deaths.shift();
+    lastDeath = why;
+    process.stderr.write(`[kontur] воркер пула потоков упал (${why}) — ${canRespawn() ? 'будет заменён' : 'падает слишком часто, пул уменьшен'}\n`);
+    if (workers) { const i = workers.indexOf(w); if (i >= 0) workers.splice(i, 1); }
+    const err = Object.assign(new Error(`воркер пула упал: ${why}`), { workerDied: true });
+    for (const [id, p] of pending) if (p.w === w) { pending.delete(id); p.reject(err); }
+    w.busy = 0; w.unref();
+  };
+  w.on('error', (e) => die(e?.message || String(e)));
+  w.on('exit', (code) => die(`выход с кодом ${code}`));
+  w.unref(); // пул не держит процесс; после on('message'): подписка снова включает ref
+  if (preloaded.size) w.postMessage({ type: 'preload', mods: [...preloaded] });
+  return w;
+}
+/** Запустить недостающие воркеры (в первый раз — все; после падений — пока они не падают слишком часто). */
 function ensure() {
-  if (workers || !POOL) return;
-  workers = [];
-  for (let k = 0; k < THREADS - 1; k++) {
-    const w = new Worker(new URL('./worker.mjs', import.meta.url), { execArgv: workerExecArgv() });
-    w.busy = 0;
-    w.on('message', (m) => {
-      const p = pending.get(m.id);
-      if (!p) return;
-      pending.delete(m.id);
-      if (--w.busy === 0) w.unref();
-      if (m.error) p.reject(new Error(m.error)); else p.resolve(m.result);
-    });
-    w.on('error', (e) => { for (const [id, p] of pending) if (p.w === w) { pending.delete(id); p.reject(e); } w.busy = 0; w.unref(); });
-    w.unref(); // пул не держит процесс; после on('message'): подписка снова включает ref
-    workers.push(w);
-  }
+  if (!POOL) return;
+  if (!workers) workers = [];
+  while (workers.length < THREADS - 1 && canRespawn()) workers.push(spawn());
 }
 const preloaded = new Set();
 /** Запустить воркеры заранее (пока идут проходы SVG) и загрузить в них модули mods: к этапам света они уже готовы. */
@@ -130,7 +158,8 @@ export function rows(modUrl, kernel, args, nRows, { grain = 8 } = {}) {
   for (;;) {
     const d = Atomics.load(ctrl, 1);
     if (d >= total) break;
-    if (Atomics.wait(ctrl, 1, d, 120000) === 'timed-out' && Atomics.load(ctrl, 1) === d) throw new Error(`пул потоков: ${kernel.name} не завершился (${d}/${total} полос)`);
+    // (главный поток здесь заблокирован и не узнаёт о падении воркера раньше; упавший заменится к следующему этапу)
+    if (Atomics.wait(ctrl, 1, d, 120000) === 'timed-out' && Atomics.load(ctrl, 1) === d) throw new Error(`пул потоков: ${kernel.name} не завершился за 2 минуты (${d}/${total} полос) — вероятно, упал воркер`);
   }
   if (localErr) throw localErr;
   if (ctrl[2]) throw new Error(`${kernel.name} в воркере: ${new TextDecoder().decode(err).replace(/\0+$/, '')}`);
@@ -147,8 +176,14 @@ export function rows(modUrl, kernel, args, nRows, { grain = 8 } = {}) {
 export async function task(modUrl, name, args, local) {
   if (!POOL) return local(args);
   ensure();
+  if (!workers.length) return local(args);
   const w = workers.reduce((a, b) => (b.busy < a.busy ? b : a));
   const id = ++taskSeq;
   if (w.busy++ === 0) w.ref(); // пока задача в работе, процесс ждёт ответа воркера
-  return new Promise((resolve, reject) => { pending.set(id, { resolve, reject, w }); w.postMessage({ type: 'task', id, mod: modUrl, name, args }); });
+  try {
+    return await new Promise((resolve, reject) => { pending.set(id, { resolve, reject, w }); w.postMessage({ type: 'task', id, mod: modUrl, name, args }); });
+  } catch (e) {
+    if (e.workerDied) return local(args); // воркер упал посреди задачи — досчитать здесь
+    throw e;
+  }
 }

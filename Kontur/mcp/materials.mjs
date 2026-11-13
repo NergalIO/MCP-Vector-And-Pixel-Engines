@@ -4,7 +4,7 @@
 import { resolve } from 'node:path';
 import { noise3, surfaceAxes } from '../engine/kontur.js';
 import { decodePNG } from './normals.mjs';
-import { fileStamp, readSrc } from './files.mjs';
+import { fileStamp, readSrc, stampCache } from './files.mjs';
 import { clamp01, lin22, rgb } from './lit/util.mjs';
 import { rows, f32 } from './lit/pool.mjs';
 import { viaGPU } from './lit/gpu.mjs';
@@ -26,16 +26,18 @@ const fbm3f = (x, y, z, oct, seed = 0) => {
 /** Хеш целых → [0, 1). */
 const h2 = (a, b, s = 0) => { let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(s | 0, 1442695041)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 
-const texCache = new Map();
+// декодированные текстуры: последняя версия каждого файла, всего не больше 512 МБ пикселей
+const texCache = stampCache({ max: 128, maxWeight: 512e6, weigh: (img) => img?.data?.length || 0 });
 /** Картинка текстуры: data: URI PNG или путь (относительно baseDir); кеш по полному пути и времени изменения. */
 function loadTex(src, baseDir) {
   const inline = src.startsWith('data:'), p = inline ? null : resolve(baseDir || '.', src);
   // stat — не чаще раза в секунду: loadTex зовётся на каждый пиксель фактуры
   const key = inline ? src : fileStamp(p, { throttleMs: 1000 });
-  if (texCache.has(key)) return texCache.get(key);
-  let img = null;
+  const id = inline ? key : p, hit = texCache.get(id, key);
+  if (hit !== undefined) return hit;
+  let img;
   try { img = decodePNG(readSrc(src, baseDir)); } catch { img = null; }
-  texCache.set(key, img);
+  texCache.set(id, key, img);
   return img;
 }
 

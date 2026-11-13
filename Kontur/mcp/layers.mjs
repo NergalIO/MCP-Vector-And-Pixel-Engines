@@ -5,7 +5,7 @@
 // анимированные слои — покадрово по клипам (одинаковые кадры подряд склеиваются через длительность),
 // варианты состояний — отдельным слоем на каждый вариант. Режимы наложения остаются у слоя (blend)
 // и переносятся движком-получателем (шейдер/материал).
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { renderSVG, clipRange, pixelOf, quantizeRGBA, collectLights, typeAnimated, modIsStatic } from '../engine/kontur.js';
 import { svgToPng, svgToRGBA, mapLimit, PARALLEL, isDeferred } from './render.mjs';
@@ -75,9 +75,11 @@ export async function bakeLayers(scene, dir, opts = {}) {
   const scale = opts.scale || (px ? 1 / px.size : 1);
   const W = scene.width, Hh = scene.height;
   const normalsOpt = opts.normals ? (typeof opts.normals === 'object' ? opts.normals : {}) : null;
+  // прежние файлы удаляет вызывающий экспорт — только свои, по списку (export_dir.mjs); здесь папка не чистится
   const layersDir = join(dir, opts.layersDir || 'layers');
-  if (existsSync(layersDir)) rmSync(layersDir, { recursive: true, force: true });
   mkdirSync(layersDir, { recursive: true });
+  const files = []; // всё записанное — в список файлов экспорта
+  const put = (f, data) => { writeFileSync(f, data); files.push(f); return f; };
 
   // клипы
   let clips = (scene.clips || []).filter((c) => !opts.clips || opts.clips.includes(c.name)).map((c) => clipRange(scene, c.name));
@@ -127,7 +129,10 @@ export async function bakeLayers(scene, dir, opts = {}) {
     for (const v of variants) for (const t of times) jobs.push({ n, t, v });
     return { n, anim, variants };
   });
-  const boxes = await mapLimit(jobs, PARALLEL, async ({ n, t, v }) => alphaBox(await svgToRGBA(renderSVG(scene, t, { only: [n.id], width: LOW, background: false, states: statesFor(v) }), LOW), k));
+  // отмена (opts.signal) проверяется перед каждым растром: экспорт большой сцены идёт минутами
+  const stop = () => opts.signal?.throwIfAborted();
+  opts.onProgress?.(0, undefined, `${tag}: разметка слоёв`);
+  const boxes = await mapLimit(jobs, PARALLEL, async ({ n, t, v }) => stop() ?? alphaBox(await svgToRGBA(renderSVG(scene, t, { only: [n.id], width: LOW, background: false, states: statesFor(v) }), LOW), k));
   const bbOf = new Map();
   jobs.forEach((j, i) => bbOf.set(j.n.id, union(bbOf.get(j.n.id) || null, boxes[i])));
   for (const { n, anim, variants } of meta) {
@@ -184,6 +189,7 @@ export async function bakeLayers(scene, dir, opts = {}) {
     return encodePNG(img);
   };
   const renderLayer = async (L, t, v) => {
+    stop();
     const [x0, y0, x1, y1] = L.bbox, bw = x1 - x0, bh = y1 - y0;
     const ids = L.items.flatMap((i) => i.ids);
     const bg = L.items.some((i) => i.bg);
@@ -223,9 +229,9 @@ export async function bakeLayers(scene, dir, opts = {}) {
             if (prev && png.equals(prev.png)) { prev.duration++; continue; }
             const f = join(layersDir, name, `${clipStem.get(c.name)}_${String(i).padStart(4, '0')}.png`);
             mkdirSync(join(layersDir, name), { recursive: true });
-            writeFileSync(f, png);
+            put(f, png);
             const fr = { file: f, png, duration: 1 };
-            if (normalsOpt && normalsOpt.animated && !L.blend) { fr.normal = f.replace(/\.png$/, '_n.png'); writeFileSync(fr.normal, await normalOf(L, c.start + i / fps, ids, ow, v)); }
+            if (normalsOpt && normalsOpt.animated && !L.blend) { fr.normal = f.replace(/\.png$/, '_n.png'); put(fr.normal, await normalOf(L, c.start + i / fps, ids, ow, v)); }
             frames.push(fr); prev = fr; frameCount++;
           }
           anims.push({ name: c.name, fps, loop: c.loop, next: c.next, frames });
@@ -236,15 +242,16 @@ export async function bakeLayers(scene, dir, opts = {}) {
         const t = clips[0].start;
         const { png, ids, ow } = await renderLayer(L, t, v);
         const f = join(layersDir, `${name}.png`);
-        writeFileSync(f, png);
+        put(f, png);
         const [width, height] = dims(png);
         const node = { type: 'static', ...common, width, height, file: f };
-        if (normalsOpt && !L.blend) { node.normal = f.replace(/\.png$/, '_n.png'); writeFileSync(node.normal, await normalOf(L, t, ids, ow, v)); }
+        if (normalsOpt && !L.blend) { node.normal = f.replace(/\.png$/, '_n.png'); put(node.normal, await normalOf(L, t, ids, ow, v)); }
         nodes.push(node);
         frameCount++;
       }
     }
     log(`${tag}: слой ${li + 1}/${layers.length} ${base}`);
+    opts.onProgress?.(li + 1, layers.length, `${tag}: слой ${li + 1}/${layers.length}`);
   }
 
   // 3а. источники света (позиции и параметры — в начале первого клипа);
@@ -265,7 +272,7 @@ export async function bakeLayers(scene, dir, opts = {}) {
   // имена источников — безопасные и без совпадений (по ним называются узлы в Godot и Unity)
   const lightName = safeNames(lights.map((l) => l.name || l.id), 'light');
   for (const l of lights) l.name = lightName.get(l.name || l.id);
-  return { W, H: Hh, px, scale, clips, fpsOf, clipStem, nodes, lights, frameCount, normals: !!normalsOpt, t0 };
+  return { W, H: Hh, px, scale, clips, fpsOf, clipStem, nodes, lights, frameCount, normals: !!normalsOpt, t0, files };
 }
 
 /** Описание слоёв, кадров и клипов (kontur_manifest.json) — для своих конвертеров и проверки. */

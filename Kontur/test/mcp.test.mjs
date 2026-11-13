@@ -1,19 +1,28 @@
-// Сквозной тест MCP-сервера: протокол, инструменты, превью.
-// node test/mcp.test.mjs [папка-для-картинок]
+// Сквозной тест MCP-сервера: протокол, инструменты, превью. Один сервер на весь файл, шаги идут по порядку
+// и продолжают общую сцену. node --test test/mcp.test.mjs (картинки — во временной папке, путь в выводе)
+import { test, after } from 'node:test';
 import { request } from 'node:http';
 import { writeFileSync, mkdtempSync, existsSync, readFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startServer, check, checks } from './helpers/mcp-child.mjs';
+import { startServer, check } from './helpers/mcp-child.mjs';
 
-const outDir = process.argv[2] || mkdtempSync(join(tmpdir(), 'kontur-test-'));
+const outDir = mkdtempSync(join(tmpdir(), 'kontur-test-'));
 const dir = mkdtempSync(join(tmpdir(), 'kontur-scene-'));
 const TOKEN = 'test-token-' + process.pid;
 const H = { headers: { 'x-kontur-token': TOKEN } };
 const { srv, rpc, call, notify, stderr } = startServer({ env: { KONTUR_SCENE: join(dir, 'scene.json'), KONTUR_PORT: '7799', KONTUR_TOKEN: TOKEN } });
 
-try {
+after(() => { srv.stdin.end(); console.log(`картинки: ${outDir}`); });
+/** Шаг сценария; при провале к ошибке добавляется хвост stderr сервера. */
+const step = (name, fn) => test(name, async () => {
+  try { await fn(); } catch (e) { e.message += '\n--- stderr сервера ---\n' + stderr().slice(-3000); throw e; }
+});
+// общее между шагами
+let info, url, sj;
+
+step('протокол: initialize, tools/list, построение сцены', async () => {
   const init = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
   check(init.result.serverInfo.name === 'kontur', 'initialize');
   notify('notifications/initialized');
@@ -32,9 +41,12 @@ try {
   await call('mod_add', { id: 'shape', mod: { type: 'spring', prop: 'rotation', stiffness: 80, damping: 8 } });
   await call('keys_set', { id: 'shape', prop: 'rotation', keys: [{ t: 0, v: 0, ease: 'hold' }, { t: 1, v: 90, ease: 'hold' }, { t: 2.5, v: 0 }] });
   await call('animate', { id: 'shape', prop: 'fill', to: '#ef476f', start: 1, duration: 2 });
-  const info = await call('scene_info');
+  info = await call('scene_info');
   check(/shape <path>/.test(info.content[0].text), 'scene_info показывает дерево');
 
+});
+
+step('ошибки откатываются, undo/redo', async () => {
   // ошибки откатываются
   const bad = await rpc('tools/call', { name: 'keys_set', arguments: { id: 'nope', prop: 'x', keys: [] } });
   check(bad.result.isError, 'ошибка на несуществующем узле');
@@ -47,6 +59,9 @@ try {
   check(json.mods.length === 1, 'undo убрал последний модификатор');
   await call('redo');
 
+});
+
+step('рендер кадра, раскадровка, экспорт html/gif, ресурс справки', async () => {
   const frame = await call('render_frame', { t: 1.5, width: 640 });
   check(frame.content[0].type === 'image', 'render_frame вернул PNG');
   writeFileSync(join(outDir, 'mcp-frame.png'), Buffer.from(frame.content[0].data, 'base64'));
@@ -64,10 +79,13 @@ try {
   const res = await rpc('resources/read', { uri: 'kontur://docs/reference' });
   check(res.result.contents[0].text.includes('Модификаторы') || res.result.contents[0].text.includes('модификаторы'), 'ресурс документации');
 
+});
+
+step('превью: токен, Host/Origin, cookie, открытие файлов', async () => {
   // превью
   await new Promise((r) => setTimeout(r, 200));
-  const url = (await call('preview_url')).content[0].text.match(/http\S+/)[0];
-  const sj = await (await fetch(url + 'scene.json', H)).json();
+  url = (await call('preview_url')).content[0].text.match(/http\S+/)[0];
+  sj = await (await fetch(url + 'scene.json', H)).json();
   check(sj.scene.nodes.length >= 3, `превью отдаёт сцену (${url})`);
   const page = await (await fetch(url)).text();
   check(page.includes('Kontur'), 'превью отдаёт плеер');
@@ -88,6 +106,9 @@ try {
   check((await fetch(url + 'asset?p=' + encodeURIComponent(fileURLToPath(new URL('../package.json', import.meta.url))), H)).status === 403, '/asset не отдаёт не-картинки');
   const openEvil = await fetch(url + 'open', { method: 'POST', ...H, body: JSON.stringify({ path: join(tmpdir(), 'x.json') }) });
   check(openEvil.status === 403, '/open — только сцены из папки сцены и examples/');
+});
+
+step('патч из студии и общая история', async () => {
   // правка патчем и общая история
   const nid = sj.scene.nodes[0].id;
   const pr = await fetch(url + 'patch?label=' + encodeURIComponent('патч'), { method: 'POST', ...H, body: JSON.stringify({ edits: { kontur: 'edits', version: 1, scene: {}, nodes: { [nid]: { props: { opacity: 0.25 } } }, removed: [], order: [] } }) });
@@ -103,6 +124,9 @@ try {
   check(JSON.parse((await call('scene_get_json', { id: nid })).content[0].text).props.opacity === 0.25, 'redo');
   await call('undo');
 
+});
+
+step('растровые слои и дизеринг', async () => {
   // растровые слои и дизеринг
   const tex = fileURLToPath(new URL('../examples/assets/paint-texture.jpg', import.meta.url));
   const sheetPng = fileURLToPath(new URL('../examples/assets/screen-sheet.png', import.meta.url));
@@ -124,6 +148,9 @@ try {
   check(texSrc.startsWith('/asset?p='), 'превью переписывает путь ассета');
   check((await fetch('http://127.0.0.1:7799' + texSrc, H)).ok, 'превью отдаёт ассет');
 
+});
+
+step('клипы, нормали, совместимость, экспорт в Godot', async () => {
   // клипы, нормали, совместимость, экспорт в Godot
   await call('clip_set', { name: 'idle', start: 0, end: 2 });
   await call('clip_set', { name: 'spin', start: 2, end: 4, loop: false, next: 'idle' });
@@ -147,6 +174,9 @@ try {
   const tscn = readFileSync(join(gdDir, 'scene.tscn'), 'utf8');
   check(/name": &"idle"/.test(tscn) && /name": &"spin"/.test(tscn) && /CanvasTexture/.test(tscn) && /next_clips = \{"spin": "idle"\}/.test(tscn), 'tscn: анимации по клипам, карты нормалей, переходы');
 
+});
+
+step('экспорт в Unity', async () => {
   // экспорт в Unity: в проект-заглушку (Assets + ProjectSettings, Linear); формат файлов сверен с Unity 6 отдельно
   const ccU = (await call('compat_check', { target: 'unity' })).content[0].text;
   check(/export format "unity"/.test(ccU) && /префаб/.test(ccU) && /режим наложения overlay/.test(ccU), 'compat_check для Unity');
@@ -189,6 +219,9 @@ try {
   check(readFileSync(join(uDir, 'Room.prefab'), 'utf8') === pf, 'Unity: повторный экспорт даёт те же GUID и fileID (ссылки в сценах не рвутся)');
   await call('node_remove', { id: 'uLight' });
 
+});
+
+step('2.5D: камера, мир, свет, проходы', async () => {
   // ---------- 2.5D: камера, мир, свет, проходы ----------
   await call('scene_new', { width: 640, height: 360, duration: 1, background: '#0d0f1a' });
   const cam = await call('camera3d_set', { hor: 120, charPx: 120, f: 520, dz: 2 });
@@ -245,15 +278,12 @@ try {
   await call('export', { format: 'png', path: ex, lit: 'deferred', width: 320 });
   check(existsSync(ex), 'export png с отложенным светом');
 
+});
+
+step('пример с ассетами открывается и рендерится', async () => {
   await call('scene_open', { path: 'examples/bay.json' });
   const bayTex = JSON.parse((await call('scene_get_json', { id: 'paint' })).content[0].text).props.src;
   check(bayTex.endsWith('paint-texture.jpg'), `пример с ассетами открыт (${bayTex})`);
   const fb = await call('render_frame', { t: 1, width: 480 });
   check(fb.content[0].type === 'image', 'рендер примера с ассетами');
-  console.log(`\nВсе проверки пройдены: ${checks()}. Картинки: ${outDir}`);
-} catch (e) {
-  console.error(e.message, '\n--- stderr ---\n', stderr());
-  process.exitCode = 1;
-} finally {
-  srv.stdin.end();
-}
+});

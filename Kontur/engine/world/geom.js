@@ -63,7 +63,8 @@ export function triangulate(ps, holes = []) {
   const tris = [];
   const cr = (a, b, c) => (b.q[0] - a.q[0]) * (c.q[1] - a.q[1]) - (b.q[1] - a.q[1]) * (c.q[0] - a.q[0]);
   const inside = (p, a, b, c) => cr(a, b, p) >= -1e-12 && cr(b, c, p) >= -1e-12 && cr(c, a, p) >= -1e-12;
-  let r = ring.slice(), guard = 0;
+  const r = ring.slice();
+  let guard = 0;
   while (r.length > 3 && guard++ < 10000) {
     let cut = false;
     for (let i = 0; i < r.length; i++) {

@@ -3,7 +3,7 @@ import { C, dark } from './color.js';
 import { rnd } from './rng.js';
 import { add, mul, norm } from './geom.js';
 import { bevel, blob } from './materials.js';
-import { face, frameOf, box, arch, disc } from './shapes.js';
+import { face, frameOf, box, disc } from './shapes.js';
 import { triangulate } from './geom.js';
 
 /** Дом: коробка (материал фасада) + крыша черепицей + окна/двери. */

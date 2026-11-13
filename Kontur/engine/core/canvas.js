@@ -51,10 +51,10 @@ export class CanvasRenderer {
     this.stats = { items: 0, fallbacks: 0, layers: 0 };
     const vb = String(tree.attrs.viewBox || `0 0 ${tree.attrs.width} ${tree.attrs.height}`).split(/\s+/).map(Number);
     const c = this.canvas;
-    let W, H, dpr = 1;
+    let W, H;
     if (this.opts.context) { W = this.opts.width ?? c.width; H = this.opts.height ?? c.height; }
     else {
-      dpr = this.opts.pixelRatio ?? (globalThis.devicePixelRatio || 1);
+      const dpr = this.opts.pixelRatio ?? (globalThis.devicePixelRatio || 1);
       const r = this.el.getBoundingClientRect();
       W = Math.max(1, Math.round(r.width * dpr)); H = Math.max(1, Math.round(r.height * dpr));
       if (c.width !== W || c.height !== H) { c.width = W; c.height = H; this.layers.length = 0; }

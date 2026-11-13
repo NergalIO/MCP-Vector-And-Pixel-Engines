@@ -1,6 +1,7 @@
 // Запуск редактора: источники сцен, живая связь с MCP-сервером, панель инструментов, вкладки, клавиши, перетаскивание файлов.
-import { K, E, on, emit, node, kidsOf, isLocked, isHidden, edit, undo, redo, canUndo, canRedo, select, toast, loadInto, remoteReplace, clearHistory, busy, pushing, esc, topSel } from './core.js';
-import { initView, fit, layout, zoomAt, zoomTo, spaceKey, stage, toScene, stagePt, setRenderer } from './view.js';
+import { K, E, on, emit, node, kidsOf, isLocked, isHidden, edit, undo, redo, canUndo, canRedo, select, toast, loadInto, remoteReplace, clearHistory, busy, pushing, preview } from './core.js';
+import { html, raw, setHTML } from './html.js';
+import { initView, fit, layout, zoomAt, zoomTo, spaceKey, stage, stagePt, setRenderer } from './view.js';
 import './overlay.js';
 import { TOOLS, setTool, nudge, deleteAnchors, finishPen, addImageFile } from './tools.js';
 import { deleteSel, copySel, cutSel, paste, duplicateSel, groupSel, ungroupSel, restack } from './actions.js';
@@ -15,7 +16,7 @@ $('ver').textContent = 'v' + K.VERSION;
 on('toast', (m) => toast(m, true));
 
 /* ---------- панель инструментов ---------- */
-const I = (d) => `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
+const I = (d) => html`<svg viewBox="0 0 24 24" aria-hidden="true">${raw(d)}</svg>`;
 const TOOLBAR = [
   ['select', 'Выбор и трансформация (V)', 'v', I('<path d="M6 3v15l4-4 3 7 2.5-1-3-7H18z"/>')],
   ['direct', 'Точки контура (A)', 'a', I('<path d="M6 3v15l4-4 3 7 2.5-1-3-7H18z" fill="currentColor"/>')],
@@ -35,8 +36,7 @@ const TOOLBAR = [
   ['hand', 'Рука: двигать вид (H; или пробел + мышь, колёсико — масштаб)', 'h', I('<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.4l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"/>')],
 ];
 const KEYS = {};
-$('tools').innerHTML = TOOLBAR.map((t) => (t ? `<button data-tool="${t[0]}" title="${esc(t[1])}" aria-label="${esc(t[1])}">${t[3]}</button>` : '<hr>')).join('')
-  + `<hr><div class="swatches" title="Заливка и обводка новых фигур"><input type="color" id="fillc" value="${E.fill}" aria-label="Заливка новых фигур"><input type="color" id="strokec" value="${E.stroke}" aria-label="Обводка новых фигур"></div>`;
+setHTML($('tools'), html`${TOOLBAR.map((t) => (t ? html`<button data-tool="${t[0]}" title="${t[1]}" aria-label="${t[1]}">${t[3]}</button>` : html`<hr>`))}<hr><div class="swatches" title="Заливка и обводка новых фигур"><input type="color" id="fillc" value="${E.fill}" aria-label="Заливка новых фигур"><input type="color" id="strokec" value="${E.stroke}" aria-label="Обводка новых фигур"></div>`);
 for (const t of TOOLBAR) if (t) KEYS[t[2]] = t[0];
 $('tools').onclick = (e) => { const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool); };
 $('fillc').oninput = (e) => (E.fill = e.target.value);
@@ -91,9 +91,9 @@ on('live pushed', () => {
   el.classList.toggle('busy', E.saving);
   el.querySelector('span').textContent = E.source !== '__live' ? (E.live ? 'не связано с MCP' : 'автономно') : E.saving ? 'сохранение…' : 'MCP · сохранено';
   const ed = E.edits, box = $('edits');
-  if (E.source === '__live' && ed?.mode) box.innerHTML = `<span title="${esc(ed.path || '')}">правки поверх скрипта: <b>${ed.count || 0}</b></span>${ed.warnings?.length ? `<span class="warn" title="${esc(ed.warnings.join('\n'))}">⚠ ${ed.warnings.length}</span>` : ''}`;
-  else if (E.source === '__live') box.innerHTML = `<span title="${esc(E.path || '')}">${esc((E.path || '').split(/[\\/]/).pop())}</span>`;
-  else box.innerHTML = E.source === 'file' ? '<span>файл из браузера — сохраняйте «Скачать JSON»</span>' : '<span>пример — правки не сохраняются на диск</span>';
+  if (E.source === '__live' && ed?.mode) setHTML(box, html`<span title="${ed.path || ''}">правки поверх скрипта: <b>${ed.count || 0}</b></span>${ed.warnings?.length > 0 && html`<span class="warn" title="${ed.warnings.join('\n')}">⚠ ${ed.warnings.length}</span>`}`);
+  else if (E.source === '__live') setHTML(box, html`<span title="${E.path || ''}">${(E.path || '').split(/[\\/]/).pop()}</span>`);
+  else setHTML(box, E.source === 'file' ? html`<span>файл из браузера — сохраняйте «Скачать JSON»</span>` : html`<span>пример — правки не сохраняются на диск</span>`);
 });
 $('download').onclick = download;
 function download() {
@@ -106,11 +106,20 @@ function download() {
 /* ---------- баннеры: запись состояния, группа ---------- */
 function banner() {
   const b = $('banner');
-  if (E.record) { b.className = 'banner'; b.innerHTML = `● Запись состояния «${esc(E.record.group)} = ${esc(E.record.value)}» — правки идут в этот вариант <button id="b-stop">Стоп</button>`; b.hidden = false; $('b-stop').onclick = () => { E.record = null; emit('record'); emit('states'); }; return; }
-  if (E.scope && node(E.scope)) { b.className = 'banner scope'; b.innerHTML = `Внутри группы «${esc(E.scope)}» <button id="b-out">Выйти (Esc)</button>`; b.hidden = false; $('b-out').onclick = exitScope; return; }
+  if (E.record) { b.className = 'banner'; setHTML(b, html`● Запись состояния «${E.record.group} = ${E.record.value}» — правки идут в этот вариант <button id="b-stop">Стоп</button>`); b.hidden = false; $('b-stop').onclick = () => { E.record = null; emit('record'); emit('states'); }; return; }
+  if (E.scope && node(E.scope)) { b.className = 'banner scope'; setHTML(b, html`Внутри группы «${E.scope}» <button id="b-out">Выйти (Esc)</button>`); b.hidden = false; $('b-out').onclick = exitScope; return; }
+  // JS-выражения из файла сцены не исполняются без согласия: доверие — ровно к этому коду (изменённый снова выключен)
+  const js = K.untrustedExprs(E.scene);
+  if (js.length) {
+    b.className = 'banner expr';
+    setHTML(b, html`<span title="${js.join('\n\n— — —\n\n').slice(0, 3000)}">JS-выражения в сцене: ${js.length} — выключены, пока вы не доверитесь коду (наведите, чтобы увидеть код)</span><button id="b-trust">Доверять</button>`);
+    b.hidden = false;
+    $('b-trust').onclick = () => { K.trustExpr(js); preview(); banner(); toast(`Доверено JS-выражений: ${js.length}`); };
+    return;
+  }
   b.hidden = true;
 }
-on('record scope sel scene', banner);
+on('record scope sel scene replace', banner);
 function exitScope() { const s = E.scope; E.scope = node(s)?.parent ?? null; select(s); emit('scope'); }
 
 /* ---------- клавиши ---------- */
@@ -216,7 +225,7 @@ async function refreshScenesList() {
 }
 function fillPicker() {
   const pick = $('pick');
-  pick.innerHTML = '';
+  pick.replaceChildren();
   if (E.live) {
     const cur = (E.path || '').toLowerCase();
     const og = document.createElement('optgroup'); og.label = 'Сцены рядом (MCP)';

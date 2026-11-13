@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { toLin, toGam } from '../../engine/kontur.js';
 import { decodeImage } from '../render.mjs';
-import { fileStamp } from '../files.mjs';
+import { fileStamp, stampCache } from '../files.mjs';
 import { clamp01 } from './util.mjs';
 import { tryGPU } from './gpu.mjs';
 import { gpuTonemap, gpuMatch, gpuGrade } from './gpu-post.mjs';
@@ -108,16 +108,17 @@ function labStats(count, get, step = 1) {
   return { meanL, stdL, ma, mb, stdC: Math.sqrt(Math.max(1e-6, sc / m)), ga: (za[0] + za[1] + za[2]) / gw, gb: (zb[0] + zb[1] + zb[2]) / gw, zw: zw.map((v) => v / gw) };
 }
 /** Кеш файлов по пути и времени изменения: правка файла на диске видна без перезапуска сервера. */
-const refCache = new Map();
+const refCache = stampCache({ max: 32 });
 /** Статистика референса (PNG, JPEG, WebP… — путь относительно baseDir), с кешем по времени изменения. */
 export async function loadRefStats(src, baseDir) {
   const p = resolvePath(baseDir || '.', src), key = fileStamp(p, { missing: 'null' });
   if (!key) throw new Error(`grade.matchRef: нет файла ${p}`);
-  if (refCache.has(key)) return refCache.get(key);
+  const hit = refCache.get(p, key);
+  if (hit !== undefined) return hit;
   const im = await decodeImage(readFileSync(p), 400);
   const d = im.data;
   const st = labStats(im.width * im.height, (i, o) => { o[0] = d[i * 4] / 255; o[1] = d[i * 4 + 1] / 255; o[2] = d[i * 4 + 2] / 255; });
-  refCache.set(key, st);
+  refCache.set(p, key, st);
   return st;
 }
 /**
@@ -146,13 +147,14 @@ export function matchPalette(img, n, ref, o = {}) {
 }
 
 /* ============================== LUT .cube ============================== */
-const lutCache = new Map();
+const lutCache = stampCache({ max: 16 });
 /** 3D LUT формата .cube (Resolve/Adobe): { size, data Float32 (r быстрее всех), min, max }; текст или путь. */
 export function loadCube(src, baseDir) {
   const inline = src.includes('\n');
   const f = inline ? null : resolvePath(baseDir || '.', src);
   const key = inline ? `inline|${src}` : fileStamp(f);
-  if (lutCache.has(key)) return lutCache.get(key);
+  const id = inline ? key : f, hit = lutCache.get(id, key);
+  if (hit !== undefined) return hit;
   let lut = null;
   try {
     const text = inline ? src : readFileSync(f, 'utf8');
@@ -169,7 +171,7 @@ export function loadCube(src, baseDir) {
     }
     if (size >= 2 && vals.length >= size ** 3 * 3) lut = { size, data: Float32Array.from(vals.slice(0, size ** 3 * 3)), min, max };
   } catch { lut = null; }
-  lutCache.set(key, lut);
+  lutCache.set(id, key, lut);
   return lut;
 }
 function lutSample(lut, r, g, b, out) {

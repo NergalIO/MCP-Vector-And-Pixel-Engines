@@ -1,6 +1,6 @@
 // Запуск всех тестов по очереди: node test/run.mjs [фильтр]
 // Каждый test/*.test.mjs идёт через встроенный node:test (отдельный процесс), по одному:
-// сквозные тесты поднимают свои серверы превью. Работает на Node 18+.
+// сквозные тесты поднимают свои серверы превью.
 import { readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';

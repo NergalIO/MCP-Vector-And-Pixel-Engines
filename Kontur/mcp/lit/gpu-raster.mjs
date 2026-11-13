@@ -8,7 +8,7 @@
 // на место в порядке художника.
 import { softwareAdapter } from './gpu.mjs';
 import { svgToPremul } from '../render.mjs';
-import { ITEM_F, PAINT_F, STOP_F, VERT_F, K_LAYER, K_DIRECT } from './raster-geom.mjs';
+import { ITEM_F, PAINT_F, VERT_F, K_LAYER, K_DIRECT } from './raster-geom.mjs';
 
 const keep = {};
 let device = null, failure = null, initP = null;
@@ -281,7 +281,7 @@ export async function rasterize(geom, layers = [], { aa = true } = {}) {
 const layerCache = new Map();
 export async function renderLayers(svgs, W, H) {
   if (!svgs.length) return [];
-  const key = svgs.join(' ');
+  const key = svgs.join('\0');
   if (layerCache.has(key)) return layerCache.get(key);
   // x/y вложенного <svg> resvg не сдвигает — страница сдвигается группой
   const pages = svgs.map((svg, k) => `<g transform="translate(0 ${k * H})">${svg}</g>`).join('');
